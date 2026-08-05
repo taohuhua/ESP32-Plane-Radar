@@ -72,43 +72,46 @@ constexpr int kCoordParamLen = 20;
 constexpr int kNameParamLen = 32;
 constexpr char kCoordInputAttrs[] = " type=\"number\" step=\"0.000001\"";
 
-// --- Location Preset Parameters (5 Locations) ---
+// Storage Buffers
 char s_loc_name_bufs[config::kMaxLocations][kNameParamLen + 1];
 char s_loc_lat_bufs[config::kMaxLocations][kCoordParamLen + 1];
 char s_loc_lon_bufs[config::kMaxLocations][kCoordParamLen + 1];
 
-// Headings and Parameter Containers
+// Parameter Pointers
 WiFiManagerParameter* s_param_loc_names[config::kMaxLocations];
 WiFiManagerParameter* s_param_loc_lats[config::kMaxLocations];
 WiFiManagerParameter* s_param_loc_lons[config::kMaxLocations];
 WiFiManagerParameter* s_loc_headers[config::kMaxLocations];
 
+// Dynamic IDs and Headers
+char s_param_ids[config::kMaxLocations][3][16];
+char s_header_html[config::kMaxLocations][64];
+
 // Unit & Display Options
 char s_miles_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_miles("use_miles", "Display distances in miles", "T", 2,
-                                    s_miles_checkbox_attrs, WFM_LABEL_AFTER);
+                                   s_miles_checkbox_attrs, WFM_LABEL_AFTER);
 
 char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
-                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
+                                     s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
 void initLocationParameters() {
   static bool parametersInitialized = false;
   if (parametersInitialized) return;
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
-    char idName[16], idLat[16], idLon[16];
-    snprintf(idName, sizeof(idName), "loc_name_%d", i);
-    snprintf(idLat, sizeof(idLat), "loc_lat_%d", i);
-    snprintf(idLon, sizeof(idLon), "loc_lon_%d", i);
+    snprintf(s_param_ids[i][0], sizeof(s_param_ids[i][0]), "loc_name_%d", i);
+    snprintf(s_param_ids[i][1], sizeof(s_param_ids[i][1]), "loc_lat_%d", i);
+    snprintf(s_param_ids[i][2], sizeof(s_param_ids[i][2]), "loc_lon_%d", i);
 
-    char headerHtml[64];
-    snprintf(headerHtml, sizeof(headerHtml), "<br><h3>Location Preset %d</h3>", i + 1);
-    s_loc_headers[i] = new WiFiManagerParameter(headerHtml);
+    snprintf(s_header_html[i], sizeof(s_header_html[i]), "<hr><h3>Location Preset %d</h3>", i + 1);
 
-    s_param_loc_names[i] = new WiFiManagerParameter(idName, "Location Name / SSID", "", kNameParamLen);
-    s_param_loc_lats[i]  = new WiFiManagerParameter(idLat, "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
-    s_param_loc_lons[i]  = new WiFiManagerParameter(idLon, "Longitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
+    // Instantiate via pointers to avoid protected copy operator issues
+    s_loc_headers[i]     = new WiFiManagerParameter(s_header_html[i]);
+    s_param_loc_names[i] = new WiFiManagerParameter(s_param_ids[i][0], "SSID / Network Name", "", kNameParamLen);
+    s_param_loc_lats[i]  = new WiFiManagerParameter(s_param_ids[i][1], "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
+    s_param_loc_lons[i]  = new WiFiManagerParameter(s_param_ids[i][2], "Longitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
   }
   parametersInitialized = true;
 }
@@ -155,7 +158,6 @@ void onPortalParamsSaved() {
     }
   }
 
-  // Sync active coordinates directly with services::location
   int activeIndex = g_profileManager.getActiveIndex();
   LocationProfile* currentProf = g_profileManager.getProfile(activeIndex);
   if (currentProf) {
