@@ -17,7 +17,8 @@
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
-// Note: g_profileManager is instantiated in main.cpp and declared extern in profile_manager.h
+// Boot button action state: 0 = Cycle Distance, 1 = Cycle Location
+uint8_t g_bootButtonMode = 0; 
 
 // --- Boot Button ISR and Debounce State ---
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -58,6 +59,7 @@ namespace {
 
 constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
+constexpr char kPrefsButtonModeKey[]  = "btn_mode";
 
 bool s_force_config_portal = false;
 WiFiManager s_wm;
@@ -96,6 +98,10 @@ char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
+// BOOT Button Mode Option Pointer
+char s_btn_mode_html[256];
+WiFiManagerParameter* s_param_btn_mode = nullptr;
+
 void initLocationParameters() {
   static bool parametersInitialized = false;
   if (parametersInitialized) return;
@@ -107,7 +113,6 @@ void initLocationParameters() {
 
     snprintf(s_header_html[i], sizeof(s_header_html[i]), "<hr><h3>Location Preset %d</h3>", i + 1);
 
-    // Instantiate via pointers to avoid protected copy operator issues
     s_loc_headers[i]     = new WiFiManagerParameter(s_header_html[i]);
     s_param_loc_names[i] = new WiFiManagerParameter(s_param_ids[i][0], "SSID / Network Name", "", kNameParamLen);
     s_param_loc_lats[i]  = new WiFiManagerParameter(s_param_ids[i][1], "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
@@ -116,8 +121,17 @@ void initLocationParameters() {
   parametersInitialized = true;
 }
 
+void loadButtonModePreference() {
+  Preferences prefs;
+  if (prefs.begin(kWifiPrefsNamespace, true)) {
+    g_bootButtonMode = prefs.getUChar(kPrefsButtonModeKey, 0);
+    prefs.end();
+  }
+}
+
 void refreshPortalParamDefaults() {
   initLocationParameters();
+  loadButtonModePreference();
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
     LocationProfile* prof = g_profileManager.getProfile(i);
@@ -142,6 +156,21 @@ void refreshPortalParamDefaults() {
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
+
+  snprintf(s_btn_mode_html, sizeof(s_btn_mode_html),
+           "<hr><h3>Button Settings</h3>"
+           "<label for=\"btn_mode\">BOOT Button Tap Action</label>"
+           "<select name=\"btn_mode\" id=\"btn_mode\">"
+           "<option value=\"0\" %s>Cycle Distance Range</option>"
+           "<option value=\"1\" %s>Cycle Location Profile</option>"
+           "</select>",
+           (g_bootButtonMode == 0) ? "selected" : "",
+           (g_bootButtonMode == 1) ? "selected" : "");
+
+  if (s_param_btn_mode != nullptr) {
+    delete s_param_btn_mode;
+  }
+  s_param_btn_mode = new WiFiManagerParameter(s_btn_mode_html);
 }
 
 void onPortalParamsSaved() {
@@ -166,6 +195,18 @@ void onPortalParamsSaved() {
 
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
+
+  if (s_param_btn_mode != nullptr) {
+    const char* btnVal = s_param_btn_mode->getValue();
+    if (btnVal != nullptr) {
+      g_bootButtonMode = static_cast<uint8_t>(atoi(btnVal));
+      Preferences prefs;
+      if (prefs.begin(kWifiPrefsNamespace, false)) {
+        prefs.putUChar(kPrefsButtonModeKey, g_bootButtonMode);
+        prefs.end();
+      }
+    }
+  }
 }
 
 void attachPortalParams(WiFiManager& wm) {
@@ -180,6 +221,9 @@ void attachPortalParams(WiFiManager& wm) {
 
   wm.addParameter(&s_param_miles);
   wm.addParameter(&s_param_runways);
+  if (s_param_btn_mode != nullptr) {
+    wm.addParameter(s_param_btn_mode);
+  }
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
 
@@ -438,7 +482,10 @@ bool wifiBootButtonPressed() {
   return digitalRead(config::kBootPin) == LOW;
 }
 
-void bootButtonInit() { initBootButton(); }
+void bootButtonInit() { 
+  initBootButton(); 
+  loadButtonModePreference();
+}
 
 bool bootButtonConsumeTap() {
   portENTER_CRITICAL(&s_boot_mux);
@@ -482,7 +529,7 @@ void wifiResetCredentialsAndReboot() {
 }
 
 bool wifiReconnect() {
-  initBootButton();
+  bootButtonInit();
   Serial.println("WiFi reconnecting...");
   return scanAndConnectSavedNetworks(true);
 }
@@ -503,7 +550,7 @@ void wifiLoop() {
 }
 
 bool wifiSetupConnect() {
-  initBootButton();
+  bootButtonInit();
   ensureWifiManager();
 
   const bool force_portal = consumeForceConfigPortal();

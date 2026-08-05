@@ -16,6 +16,10 @@
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
+// External parameter defined in wifi_setup.cpp
+// 0 = Cycle Distance Range, 1 = Cycle Location Profile
+extern uint8_t g_bootButtonMode;
+
 // Definition of the global ProfileManager instance
 ProfileManager g_profileManager;
 
@@ -57,6 +61,43 @@ void fetchAndDrawAircraft() {
   buttonHandlerPoll();
 }
 
+void handleBootButtonTap() {
+  if (!bootButtonConsumeTap()) {
+    return;
+  }
+
+  if (g_bootButtonMode == 0) {
+    // Mode 0: Cycle Distance / Range
+    ui::radar::rangeNext();
+    Serial.println("[Button] Switched Radar Range");
+  } else {
+    // Mode 1: Cycle Location Profile (Skips profiles with Lat/Lon at 0.0)
+    int totalProfiles = g_profileManager.getProfileCount();
+    if (totalProfiles > 0) {
+      int startIndex = g_profileManager.getActiveIndex();
+      int nextIdx = startIndex;
+
+      for (int i = 0; i < totalProfiles; ++i) {
+        g_profileManager.nextProfile();
+        LocationProfile* prof = g_profileManager.getActiveProfile();
+        
+        // Stop if we find valid non-zero coordinates
+        if (prof && (prof->lat != 0.0f || prof->lon != 0.0f)) {
+          break;
+        }
+      }
+
+      syncLocationFromActiveProfile();
+
+      // Refresh aircraft data immediately for new location coordinates
+      if (g_radar_visible) {
+        fetchAndDrawAircraft();
+      }
+      Serial.println("[Button] Switched Location Profile");
+    }
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -65,6 +106,7 @@ void setup() {
   Serial.println();
   Serial.println("Plane Radar");
 
+  bootButtonInit();
   buttonHandlerInit();
   displayInit();
   
@@ -91,6 +133,7 @@ void setup() {
 
 void loop() {
   buttonHandlerPoll();
+  handleBootButtonTap();
   wifiLoop();
 
   if (WiFi.status() != WL_CONNECTED) {

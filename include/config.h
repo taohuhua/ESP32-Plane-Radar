@@ -64,8 +64,8 @@ struct RadarLocation {
 // Default preset locations (Wyndham, Essendon, etc.)
 constexpr RadarLocation kDefaultLocations[kMaxLocations] = {
     {"Essendon Airport", -37.7281, 144.9021},
-    {"Melbourne",          -37.8136, 144.9631},
-    {"Location 3",         0.0000,   0.0000},
+    {"MEL",          -37.8136, 144.9631},
+    {"Tulla",         -37.6637,   144.8448},
     {"Location 4",         0.0000,   0.0000},
     {"Location 5",         0.0000,   0.0000}
 };
