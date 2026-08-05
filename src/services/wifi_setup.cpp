@@ -17,7 +17,7 @@
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
-ProfileManager g_profileManager;
+// Note: g_profileManager is instantiated in main.cpp and declared extern in profile_manager.h
 
 // --- Boot Button ISR and Debounce State ---
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -69,28 +69,70 @@ void stopLanWebPortal();
 bool wifiLinkUp();
 
 constexpr int kCoordParamLen = 20;
+constexpr int kNameParamLen = 32;
 constexpr char kCoordInputAttrs[] = " type=\"number\" step=\"0.000001\"";
 
-WiFiManagerParameter s_param_lat("radar_lat", "Latitude (deg)", "0",
-                                kCoordParamLen, kCoordInputAttrs);
-WiFiManagerParameter s_param_lon("radar_lon", "Longitude (deg)", "0",
-                                kCoordParamLen, kCoordInputAttrs);
+// --- Location Preset Parameters (5 Locations) ---
+char s_loc_name_bufs[config::kMaxLocations][kNameParamLen + 1];
+char s_loc_lat_bufs[config::kMaxLocations][kCoordParamLen + 1];
+char s_loc_lon_bufs[config::kMaxLocations][kCoordParamLen + 1];
 
+// Headings and Parameter Containers
+WiFiManagerParameter* s_param_loc_names[config::kMaxLocations];
+WiFiManagerParameter* s_param_loc_lats[config::kMaxLocations];
+WiFiManagerParameter* s_param_loc_lons[config::kMaxLocations];
+WiFiManagerParameter* s_loc_headers[config::kMaxLocations];
+
+// Unit & Display Options
 char s_miles_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_miles("use_miles", "Display distances in miles", "T", 2,
-                                   s_miles_checkbox_attrs, WFM_LABEL_AFTER);
+                                    s_miles_checkbox_attrs, WFM_LABEL_AFTER);
 
 char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
-                                     s_runways_checkbox_attrs, WFM_LABEL_AFTER);
+                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
+
+void initLocationParameters() {
+  static bool parametersInitialized = false;
+  if (parametersInitialized) return;
+
+  for (int i = 0; i < config::kMaxLocations; ++i) {
+    char idName[16], idLat[16], idLon[16];
+    snprintf(idName, sizeof(idName), "loc_name_%d", i);
+    snprintf(idLat, sizeof(idLat), "loc_lat_%d", i);
+    snprintf(idLon, sizeof(idLon), "loc_lon_%d", i);
+
+    char headerHtml[64];
+    snprintf(headerHtml, sizeof(headerHtml), "<br><h3>Location Preset %d</h3>", i + 1);
+    s_loc_headers[i] = new WiFiManagerParameter(headerHtml);
+
+    s_param_loc_names[i] = new WiFiManagerParameter(idName, "Location Name / SSID", "", kNameParamLen);
+    s_param_loc_lats[i]  = new WiFiManagerParameter(idLat, "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
+    s_param_loc_lons[i]  = new WiFiManagerParameter(idLon, "Longitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
+  }
+  parametersInitialized = true;
+}
 
 void refreshPortalParamDefaults() {
-  char lat_buf[kCoordParamLen + 1];
-  char lon_buf[kCoordParamLen + 1];
-  snprintf(lat_buf, sizeof(lat_buf), "%.6f", services::location::lat());
-  snprintf(lon_buf, sizeof(lon_buf), "%.6f", services::location::lon());
-  s_param_lat.setValue(lat_buf, kCoordParamLen);
-  s_param_lon.setValue(lon_buf, kCoordParamLen);
+  initLocationParameters();
+
+  for (int i = 0; i < config::kMaxLocations; ++i) {
+    LocationProfile* prof = g_profileManager.getProfile(i);
+    if (prof && strlen(prof->name) > 0) {
+      snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", prof->name);
+      snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", prof->lat);
+      snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", prof->lon);
+    } else {
+      snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", config::kDefaultLocations[i].name);
+      snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", config::kDefaultLocations[i].lat);
+      snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", config::kDefaultLocations[i].lon);
+    }
+
+    s_param_loc_names[i]->setValue(s_loc_name_bufs[i], kNameParamLen);
+    s_param_loc_lats[i]->setValue(s_loc_lat_bufs[i], kCoordParamLen);
+    s_param_loc_lons[i]->setValue(s_loc_lon_bufs[i], kCoordParamLen);
+  }
+
   snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
   s_param_miles.setValue("T", 2);
@@ -100,20 +142,24 @@ void refreshPortalParamDefaults() {
 }
 
 void onPortalParamsSaved() {
-  const char* raw_lat = s_param_lat.getValue();
-  const char* raw_lon = s_param_lon.getValue();
+  String activeSSID = s_wm.getWiFiSSID();
+  String activePass = s_wm.getWiFiPass();
 
-  if (!services::location::saveFromStrings(raw_lat, raw_lon)) {
-    Serial.println("Invalid lat/lon in portal — keeping previous location");
-  } else {
-    // Add or update profile for currently saved Wi-Fi SSID
-    String activeSSID = s_wm.getWiFiSSID();
-    String activePass = s_wm.getWiFiPass();
-    if (activeSSID.length() > 0) {
-      float lat = atof(raw_lat);
-      float lon = atof(raw_lon);
-      g_profileManager.addOrUpdateProfile("WiFi Preset", activeSSID.c_str(), activePass.c_str(), lat, lon);
+  for (int i = 0; i < config::kMaxLocations; ++i) {
+    const char* name = s_param_loc_names[i]->getValue();
+    float lat = atof(s_param_loc_lats[i]->getValue());
+    float lon = atof(s_param_loc_lons[i]->getValue());
+
+    if (strlen(name) > 0) {
+      g_profileManager.addOrUpdateProfile(name, name, activePass.c_str(), lat, lon);
     }
+  }
+
+  // Sync active coordinates directly with services::location
+  int activeIndex = g_profileManager.getActiveIndex();
+  LocationProfile* currentProf = g_profileManager.getProfile(activeIndex);
+  if (currentProf) {
+    services::location::set(currentProf->lat, currentProf->lon, currentProf->name);
   }
 
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
@@ -122,8 +168,14 @@ void onPortalParamsSaved() {
 
 void attachPortalParams(WiFiManager& wm) {
   refreshPortalParamDefaults();
-  wm.addParameter(&s_param_lat);
-  wm.addParameter(&s_param_lon);
+
+  for (int i = 0; i < config::kMaxLocations; ++i) {
+    wm.addParameter(s_loc_headers[i]);
+    wm.addParameter(s_param_loc_names[i]);
+    wm.addParameter(s_param_loc_lats[i]);
+    wm.addParameter(s_param_loc_lons[i]);
+  }
+
   wm.addParameter(&s_param_miles);
   wm.addParameter(&s_param_runways);
   wm.setSaveParamsCallback(onPortalParamsSaved);
@@ -336,14 +388,8 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
         if (tryConnectWithUi(prof->ssid, prof->pass, show_ui)) {
           g_profileManager.setActiveIndex(p);
 
-          // Convert floats to string buffers for MatixYo's location service
-          char latBuf[20];
-          char lonBuf[20];
-          snprintf(latBuf, sizeof(latBuf), "%.6f", prof->lat);
-          snprintf(lonBuf, sizeof(lonBuf), "%.6f", prof->lon);
-
-          services::location::saveFromStrings(latBuf, lonBuf);
-          Serial.printf("[LOCATION] Loaded Profile Coordinates: (%s, %s)\n", latBuf, lonBuf);
+          services::location::set(prof->lat, prof->lon, prof->name);
+          Serial.printf("[LOCATION] Loaded Profile Coordinates: (%.6f, %.6f)\n", prof->lat, prof->lon);
           return true;
         }
       }
@@ -374,7 +420,6 @@ bool openConfigPortal() {
 }  // namespace
 
 bool wifiShowsSetupScreenOnBoot() {
-  g_profileManager.begin();
   if (s_force_config_portal) {
     return true;
   }
@@ -458,7 +503,6 @@ void wifiLoop() {
 bool wifiSetupConnect() {
   initBootButton();
   ensureWifiManager();
-  g_profileManager.begin();
 
   const bool force_portal = consumeForceConfigPortal();
   WiFi.setAutoReconnect(false);

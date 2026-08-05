@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <driver/gpio.h>
 
 namespace config {
@@ -22,20 +23,28 @@ constexpr unsigned long kWifiDownGraceMs = 4000;
 /** Minimum interval between background reconnect tries. */
 constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 
-// --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
-constexpr gpio_num_t kBootPin = GPIO_NUM_9;
+// --- Buttons & Hardware Controls ---
+constexpr gpio_num_t kBootPin = GPIO_NUM_9;            // System BOOT pin (Flashing / Factory Reset)
+constexpr gpio_num_t kLocationBtnPin = GPIO_NUM_2;     // Dedicated Location Button (Active LOW)
+constexpr gpio_num_t kRadiusBtnPin   = GPIO_NUM_5;     // Dedicated Radius Button (Active LOW)
+
 constexpr unsigned long kBootResetHoldMs = 3000UL;
-/** Ignore BOOT taps shorter than this (debounce). */
+/** Ignore button taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
+
+enum class ButtonMode : uint8_t {
+    CycleLocation = 0,
+    CycleRadius   = 1
+};
 
 // --- Display: GC9A01 1.28" round 240×240 (SPI) ---
 constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_0;
-constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_1;
-constexpr gpio_num_t kDisplayPinDc = GPIO_NUM_10;
-constexpr gpio_num_t kDisplayPinMosi = GPIO_NUM_3;  // display SDA
-constexpr gpio_num_t kDisplayPinSclk = GPIO_NUM_4;  // display SCL
+constexpr gpio_num_t kDisplayPinCs  = GPIO_NUM_1;
+constexpr gpio_num_t kDisplayPinDc  = GPIO_NUM_10;
+constexpr gpio_num_t kDisplayPinMosi = GPIO_NUM_3;  // Display SDA
+constexpr gpio_num_t kDisplayPinSclk = GPIO_NUM_4;  // Display SCL
 
-constexpr int kDisplayWidth = 240;
+constexpr int kDisplayWidth  = 240;
 constexpr int kDisplayHeight = 240;
 
 constexpr uint32_t kDisplaySpiWriteHz = 40000000;
@@ -43,9 +52,23 @@ constexpr uint32_t kDisplaySpiWriteHz = 40000000;
 constexpr bool kDisplayInvert = true;
 constexpr bool kDisplayRgbOrder = true;
 
-// --- Radar center defaults (Updated to Essendon Airport area) ---
-constexpr double kDefaultRadarLat = -37.7281;
-constexpr double kDefaultRadarLon = 144.9021;
+// --- Multi-Location Configuration ---
+constexpr size_t kMaxLocations = 5;
+
+struct RadarLocation {
+    char name[20];
+    double lat;
+    double lon;
+};
+
+// Default preset locations (Wyndham, Essendon, etc.)
+constexpr RadarLocation kDefaultLocations[kMaxLocations] = {
+    {"Essendon Airport", -37.7281, 144.9021},
+    {"Melbourne",          -37.8136, 144.9631},
+    {"Location 3",         0.0000,   0.0000},
+    {"Location 4",         0.0000,   0.0000},
+    {"Location 5",         0.0000,   0.0000}
+};
 
 // --- Multi-SSID Profile Limits ---
 constexpr size_t kMaxLocationProfiles = 5;

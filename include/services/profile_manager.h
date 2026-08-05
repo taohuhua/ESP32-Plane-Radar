@@ -68,6 +68,18 @@ public:
         prefs.putInt("active_idx", activeIndex);
     }
 
+    // Cycles to the next available profile in the array
+    LocationProfile* nextProfile() {
+        if (profileCount <= 0) return nullptr;
+        
+        if (profileCount > 1) {
+            activeIndex = (activeIndex + 1) % profileCount;
+            saveProfiles();
+        }
+        
+        return &profiles[activeIndex];
+    }
+
     bool addOrUpdateProfile(const char* name, const char* ssid, const char* pass, float lat, float lon) {
         for (int i = 0; i < profileCount; i++) {
             if (strcmp(profiles[i].ssid, ssid) == 0) {
@@ -128,4 +140,4 @@ public:
 
 extern ProfileManager g_profileManager;
 
-#endif
+#endif // SERVICES_PROFILE_MANAGER_H

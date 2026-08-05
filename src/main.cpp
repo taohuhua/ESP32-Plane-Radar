@@ -5,14 +5,19 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include "button_handler.h"
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
+#include "services/profile_manager.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
+
+// Definition of the global ProfileManager instance
+ProfileManager g_profileManager;
 
 namespace {
 
@@ -20,6 +25,17 @@ bool g_radar_visible = false;
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
+
+void syncLocationFromActiveProfile() {
+  LocationProfile* prof = g_profileManager.getActiveProfile();
+  if (prof) {
+    services::location::set(prof->lat, prof->lon, prof->name);
+    Serial.printf("[Setup] Active Profile: %s (Lat: %.4f, Lon: %.4f)\n", 
+                  prof->name, prof->lat, prof->lon);
+  } else {
+    Serial.println("[Setup] No profile found, using location defaults.");
+  }
+}
 
 void showRadarIfConnected() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -30,34 +46,15 @@ void showRadarIfConnected() {
   g_radar_visible = true;
 }
 
-void onRangeTap() {
-  ui::radar::rangeNext();
-  char range_label[12];
-  ui::radar::formatCurrentRing3Label(range_label, sizeof(range_label));
-  Serial.printf("Range: %s (outer ~%.0f km)\n", range_label,
-                ui::radar::rangeCurrent().outer_km);
-
-  if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
-    ui::radarDisplayDraw();
-  }
-}
-
-void handleBootButton() {
-  bootButtonPollLongPress();
-  if (bootButtonConsumeTap()) {
-    onRangeTap();
-  }
-}
-
 void fetchAndDrawAircraft() {
   const float fetch_km = ui::radar::fetchRadiusKm();
   if (!services::adsb::fetchUpdate(services::location::lat(),
                                    services::location::lon(), fetch_km)) {
-    handleBootButton();
+    buttonHandlerPoll();
     return;
   }
   ui::radarDisplayRefreshAircraft();
-  handleBootButton();
+  buttonHandlerPoll();
 }
 
 }  // namespace
@@ -68,26 +65,32 @@ void setup() {
   Serial.println();
   Serial.println("Plane Radar");
 
-  bootButtonInit();
+  buttonHandlerInit();
   displayInit();
   
-  // Initialize Profile Manager & check if setup screen is needed
+  // 1. Initialize Profile Manager before attempting Wi-Fi or portal screens
+  g_profileManager.begin();
+
+  // 2. Sync stored location coordinates into the location service
+  services::location::init();
+  syncLocationFromActiveProfile();
+
+  // 3. Launch portal screen if configured/requested
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }
   
-  services::location::init();
   ui::radar::rangeInit();
   services::adsb::setPollFn(wifiLoop);
 
-  // Scans saved Wi-Fi networks and connects to the best profile
+  // 4. Connect using profile credentials
   if (wifiSetupConnect()) {
     showRadarIfConnected();
   }
 }
 
 void loop() {
-  handleBootButton();
+  buttonHandlerPoll();
   wifiLoop();
 
   if (WiFi.status() != WL_CONNECTED) {

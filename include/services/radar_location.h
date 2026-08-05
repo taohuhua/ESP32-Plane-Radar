@@ -1,18 +1,22 @@
 #pragma once
 
-namespace services::location {
+#include <cstddef>
 
-/** Load saved lat/lon from NVS, or use config defaults. Call once before WiFi setup. */
+namespace services {
+namespace location {
+
 void init();
-
-/** Factory defaults when nothing is stored (also used for portal field prefill). */
 double lat();
 double lon();
+const char* name();
+size_t currentIndex();
+size_t count();
 
-/** Parse portal strings, validate, persist to NVS, update runtime values. */
+void setIndex(size_t index);
+void next();
+void set(double latitude, double longitude, const char* location_name);
 bool saveFromStrings(const char* lat_str, const char* lon_str);
-
-/** Clear stored coordinates (e.g. with WiFi credential reset). */
 void clear();
 
-}  // namespace services::location
+}  // namespace location
+}  // namespace services

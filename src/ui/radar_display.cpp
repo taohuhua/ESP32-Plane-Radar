@@ -124,7 +124,7 @@ void initLabelMetrics() {
     s_scale_vlw_size = findVlwSizeForHeight(scale_target);
   } else {
     const lgfx::GFXfont* cardinal_candidates[] = {&fonts::FreeSansBold12pt7b,
-                                                  &fonts::FreeSansBold9pt7b};
+                                                 &fonts::FreeSansBold9pt7b};
     s_cardinal_gfx =
         pickGfxFontClosest(cardinal_target, cardinal_candidates, 2);
     s_cardinal_use_vlw = false;
@@ -132,7 +132,7 @@ void initLabelMetrics() {
     const int cardinal_h = measureGfxHeight(*s_cardinal_gfx);
     const int scale_target = cardinal_h - radar::kScaleBelowCardinalPx;
     const lgfx::GFXfont* scale_candidates[] = {&fonts::FreeSansBold9pt7b,
-                                               &fonts::FreeSansBold12pt7b};
+                                              &fonts::FreeSansBold12pt7b};
     s_scale_gfx = pickGfxFontClosest(scale_target, scale_candidates, 2);
     s_scale_use_vlw = false;
   }
@@ -166,7 +166,7 @@ void initTagLabelMetrics() {
     s_tag_vlw_size = findVlwSizeForHeight(target);
   } else {
     const lgfx::GFXfont* tag_candidates[] = {&fonts::FreeSansBold12pt7b,
-                                               &fonts::FreeSansBold9pt7b};
+                                              &fonts::FreeSansBold9pt7b};
     s_tag_gfx = pickGfxFontClosest(target, tag_candidates, 2);
     s_tag_use_vlw = false;
   }
@@ -213,7 +213,7 @@ void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
 float innerRingMaxKm() {
   const float outer_km = radar::rangeCurrent().outer_km;
   return outer_km * (static_cast<float>(radar::kGridOuterRadius -
-                                       radar::kAircraftInsideRingInsetPx) /
+                                        radar::kAircraftInsideRingInsetPx) /
                      static_cast<float>(radar::kGridOuterRadius));
 }
 
@@ -566,6 +566,19 @@ void drawCardinalLabel(const char* text, int x, int y, textdatum_t datum) {
   s_draw->drawString(text, x, y);
 }
 
+void drawLocationOverlay() {
+  const char* loc_name = services::location::name();
+  if (loc_name == nullptr || loc_name[0] == '\0') {
+    return;
+  }
+
+  applyScaleStyle();
+  s_draw->setTextDatum(textdatum_t::top_center);
+  s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
+  // Render near top center inside the round display margin (Y=16)
+  s_draw->drawString(loc_name, radar::kCenterX, 16);
+}
+
 void drawScaleLabelWithBackground(const char* text, int x, int y) {
   applyScaleStyle();
   s_draw->setTextDatum(textdatum_t::middle_right);
@@ -652,6 +665,7 @@ void drawStaticGrid(Gfx& gfx) {
   runway::drawLargeAirportRunways(gfx);
   drawCenterDot(cx, cy);
   drawCardinalLabels();
+  drawLocationOverlay();
   drawScaleLabel(cx, cy, grid_r);
   gfx.setTextDatum(textdatum_t::top_left);
 }
