@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-
 #include <driver/gpio.h>
 
 namespace config {
@@ -44,9 +43,12 @@ constexpr uint32_t kDisplaySpiWriteHz = 40000000;
 constexpr bool kDisplayInvert = true;
 constexpr bool kDisplayRgbOrder = true;
 
-// --- Radar center defaults (overridden via WiFi setup portal) ---
-constexpr double kDefaultRadarLat = 52.3676;
-constexpr double kDefaultRadarLon = 4.9041;
+// --- Radar center defaults (Updated to Essendon Airport area) ---
+constexpr double kDefaultRadarLat = -37.7281;
+constexpr double kDefaultRadarLon = 144.9021;
+
+// --- Multi-SSID Profile Limits ---
+constexpr size_t kMaxLocationProfiles = 5;
 
 /** Poll adsb.fi (API public limit: 1 req/s). */
 constexpr unsigned long kAdsbFetchIntervalMs = 3000;

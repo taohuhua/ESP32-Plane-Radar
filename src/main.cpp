@@ -70,13 +70,26 @@ void setup() {
 
   bootButtonInit();
   displayInit();
+<<<<<<< HEAD
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }
+=======
+  
+  // Initialize Profile Manager & check if setup screen is needed
+  if (wifiShowsSetupScreenOnBoot()) {
+    statusScreenPortal();
+  }
+  
+>>>>>>> f0ed820 (Initial commit: Multi-SSID scanning and location preset integration)
   services::location::init();
   ui::radar::rangeInit();
   services::adsb::setPollFn(wifiLoop);
 
+<<<<<<< HEAD
+=======
+  // Scans saved Wi-Fi networks and connects to the best profile
+>>>>>>> f0ed820 (Initial commit: Multi-SSID scanning and location preset integration)
   if (wifiSetupConnect()) {
     showRadarIfConnected();
   }

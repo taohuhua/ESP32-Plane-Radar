@@ -2,9 +2,7 @@
 
 #include <WiFi.h>
 #include <WiFiManager.h>
-
 #include <cstdio>
-
 #include <Preferences.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
@@ -14,10 +12,14 @@
 #endif
 
 #include "config.h"
+#include "services/profile_manager.h"
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
+ProfileManager g_profileManager;
+
+// --- Boot Button ISR and Debounce State ---
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_boot_tap_pending = false;
 volatile bool s_boot_is_down = false;
@@ -54,7 +56,6 @@ void initBootButton() {
 
 namespace {
 
-/** Separate from planeradar prefs (rangeInit) to avoid NVS handle conflicts. */
 constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
 
@@ -68,8 +69,7 @@ void stopLanWebPortal();
 bool wifiLinkUp();
 
 constexpr int kCoordParamLen = 20;
-constexpr char kCoordInputAttrs[] =
-    " type=\"number\" step=\"0.000001\"";
+constexpr char kCoordInputAttrs[] = " type=\"number\" step=\"0.000001\"";
 
 WiFiManagerParameter s_param_lat("radar_lat", "Latitude (deg)", "0",
                                 kCoordParamLen, kCoordInputAttrs);
@@ -100,10 +100,22 @@ void refreshPortalParamDefaults() {
 }
 
 void onPortalParamsSaved() {
-  if (!services::location::saveFromStrings(s_param_lat.getValue(),
-                                           s_param_lon.getValue())) {
+  const char* raw_lat = s_param_lat.getValue();
+  const char* raw_lon = s_param_lon.getValue();
+
+  if (!services::location::saveFromStrings(raw_lat, raw_lon)) {
     Serial.println("Invalid lat/lon in portal — keeping previous location");
+  } else {
+    // Add or update profile for currently saved Wi-Fi SSID
+    String activeSSID = s_wm.getWiFiSSID();
+    String activePass = s_wm.getWiFiPass();
+    if (activeSSID.length() > 0) {
+      float lat = atof(raw_lat);
+      float lon = atof(raw_lon);
+      g_profileManager.addOrUpdateProfile("WiFi Preset", activeSSID.c_str(), activePass.c_str(), lat, lon);
+    }
   }
+
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 }
@@ -153,20 +165,6 @@ bool consumeForceConfigPortal() {
     prefs.end();
   }
   return true;
-}
-
-bool storedWifiCredentials() {
-  wifi_mode_t mode = WIFI_MODE_NULL;
-  if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
-    WiFi.mode(WIFI_STA);
-    delay(50);
-  }
-
-  wifi_config_t conf = {};
-  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) {
-    return false;
-  }
-  return conf.sta.ssid[0] != '\0';
 }
 
 void eraseWifiCredentials() {
@@ -264,15 +262,6 @@ void prepareSta() {
   WiFi.setAutoReconnect(true);
 }
 
-void startStaConnect(const String& ssid, const String& pass) {
-  prepareSta();
-  if (ssid.length() > 0) {
-    WiFi.begin(ssid.c_str(), pass.c_str());
-  } else {
-    WiFi.begin();
-  }
-}
-
 bool waitForLinkWithUi(const char* ssid_for_ui, unsigned long attempt_ms) {
   const unsigned long deadline = millis() + attempt_ms;
   while (millis() < deadline) {
@@ -305,7 +294,12 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
       delay(400);
     }
 
-    startStaConnect(ssid, pass);
+    prepareSta();
+    if (ssid.length() > 0) {
+      WiFi.begin(ssid.c_str(), pass.c_str());
+    } else {
+      WiFi.begin();
+    }
 
     if (waitForLinkWithUi(ui_ssid, config::kWifiConnectAttemptMs)) {
       return true;
@@ -315,18 +309,48 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
   return false;
 }
 
-bool connectSavedNetwork(bool show_ui) {
-  if (!storedWifiCredentials()) {
+bool scanAndConnectSavedNetworks(bool show_ui) {
+  int profileCount = g_profileManager.getProfileCount();
+  if (profileCount == 0) {
+    String ssid = s_wm.getWiFiSSID();
+    String pass = s_wm.getWiFiPass();
+    if (ssid.length() > 0) {
+      return tryConnectWithUi(ssid, pass, show_ui);
+    }
     return false;
   }
 
-  ensureWifiManager();
-  const String ssid = s_wm.getWiFiSSID();
-  if (ssid.length() == 0) {
-    return false;
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  Serial.println("[WIFI] Scanning networks...");
+  int n = WiFi.scanNetworks();
+
+  for (int i = 0; i < n; ++i) {
+    String scannedSSID = WiFi.SSID(i);
+    for (int p = 0; p < profileCount; p++) {
+      LocationProfile* prof = g_profileManager.getProfile(p);
+      if (scannedSSID.equalsIgnoreCase(prof->ssid)) {
+        Serial.printf("[WIFI] Found saved network: %s. Connecting...\n", prof->ssid);
+        if (tryConnectWithUi(prof->ssid, prof->pass, show_ui)) {
+          g_profileManager.setActiveIndex(p);
+
+          // Convert floats to string buffers for MatixYo's location service
+          char latBuf[20];
+          char lonBuf[20];
+          snprintf(latBuf, sizeof(latBuf), "%.6f", prof->lat);
+          snprintf(lonBuf, sizeof(lonBuf), "%.6f", prof->lon);
+
+          services::location::saveFromStrings(latBuf, lonBuf);
+          Serial.printf("[LOCATION] Loaded Profile Coordinates: (%s, %s)\n", latBuf, lonBuf);
+          return true;
+        }
+      }
+    }
   }
-  const String pass = s_wm.getWiFiPass();
-  return tryConnectWithUi(ssid, pass, show_ui);
+
+  return false;
 }
 
 bool openConfigPortal() {
@@ -350,6 +374,7 @@ bool openConfigPortal() {
 }  // namespace
 
 bool wifiShowsSetupScreenOnBoot() {
+  g_profileManager.begin();
   if (s_force_config_portal) {
     return true;
   }
@@ -412,7 +437,7 @@ void wifiResetCredentialsAndReboot() {
 bool wifiReconnect() {
   initBootButton();
   Serial.println("WiFi reconnecting...");
-  return connectSavedNetwork(true);
+  return scanAndConnectSavedNetworks(true);
 }
 
 void wifiLoop() {
@@ -433,6 +458,7 @@ void wifiLoop() {
 bool wifiSetupConnect() {
   initBootButton();
   ensureWifiManager();
+  g_profileManager.begin();
 
   const bool force_portal = consumeForceConfigPortal();
   WiFi.setAutoReconnect(false);
@@ -465,18 +491,14 @@ bool wifiSetupConnect() {
     return true;
   }
 
-  if (storedWifiCredentials() && connectSavedNetwork(true)) {
+  if (scanAndConnectSavedNetworks(true)) {
     WiFi.setAutoReconnect(true);
     Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
     return true;
   }
 
-  if (storedWifiCredentials()) {
-    Serial.println("Saved WiFi could not connect — opening setup portal");
-  } else {
-    Serial.println("No saved WiFi — opening setup portal");
-  }
+  Serial.println("No saved network available — opening setup portal");
 
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
