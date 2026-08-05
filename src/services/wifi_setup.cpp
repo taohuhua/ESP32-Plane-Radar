@@ -135,14 +135,24 @@ void refreshPortalParamDefaults() {
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
     LocationProfile* prof = g_profileManager.getProfile(i);
-    if (prof && strlen(prof->name) > 0) {
+
+    // 1. Check if profile exists and has a non-empty name and non-zero lat/lon
+    if (prof && strlen(prof->name) > 0 && (prof->lat != 0.0f || prof->lon != 0.0f)) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", prof->name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", prof->lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", prof->lon);
-    } else {
+    } 
+    // 2. Fall back to config.h defaults if valid index exists
+    else if (i < (int)(sizeof(config::kDefaultLocations) / sizeof(config::kDefaultLocations[0]))) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", config::kDefaultLocations[i].name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", config::kDefaultLocations[i].lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", config::kDefaultLocations[i].lon);
+    } 
+    // 3. Blank fields for unused slots
+    else {
+      snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "");
+      snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "0.000000");
+      snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "0.000000");
     }
 
     s_param_loc_names[i]->setValue(s_loc_name_bufs[i], kNameParamLen);
