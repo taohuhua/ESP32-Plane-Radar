@@ -158,6 +158,30 @@ void handleBootButtonTap() {
 
 }  // namespace
 
+#include <Preferences.h>
+
+void testNvsPersistence() {
+  Preferences prefs;
+  
+  // 1. Open the "wifi" or "profile" namespace in read/write mode (false)
+  if (!prefs.begin("wifi", false)) {
+    Serial.println("[NVS TEST] ❌ FAILED: Could not open Preferences namespace!");
+    return;
+  }
+
+  // 2. Read the previous boot count (defaulting to 0 if key doesn't exist)
+  uint32_t bootCount = prefs.getUInt("boot_count", 0);
+  bootCount++;
+
+  // 3. Write updated count back to NVS
+  prefs.putUInt("boot_count", bootCount);
+  
+  // 4. Always close the namespace to commit writes to flash
+  prefs.end();
+
+  Serial.printf("[NVS TEST] ✅ Success! Boot Count persistent value: %u\n", bootCount);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
