@@ -413,13 +413,31 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
+  // 1. Fast path: Try connecting directly to last saved NVS credentials first
+  String storedSSID = WiFi.SSID();
+  String storedPass = WiFi.psk();
+  
+  if (storedSSID.length() > 0) {
+    Serial.printf("[WIFI] Attempting fast direct connect to cached network: %s\n", storedSSID.c_str());
+    if (tryConnectWithUi(storedSSID, storedPass, show_ui)) {
+      
+      // Look up matching profile index using standard ProfileManager methods
+      int profileCount = g_profileManager.getProfileCount();
+      for (int i = 0; i < profileCount; ++i) {
+        LocationProfile* prof = g_profileManager.getProfile(i);
+        if (prof && storedSSID.equalsIgnoreCase(prof->ssid)) {
+          g_profileManager.setActiveIndex(i);
+          services::location::set(prof->lat, prof->lon, prof->name);
+          break;
+        }
+      }
+      return true;
+    }
+  }
+
+  // 2. Multi-SSID fallback: Scan for other saved location profiles if direct connect failed
   int profileCount = g_profileManager.getProfileCount();
   if (profileCount == 0) {
-    String ssid = s_wm.getWiFiSSID();
-    String pass = s_wm.getWiFiPass();
-    if (ssid.length() > 0) {
-      return tryConnectWithUi(ssid, pass, show_ui);
-    }
     return false;
   }
 
@@ -427,20 +445,18 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
   WiFi.disconnect();
   delay(100);
 
-  Serial.println("[WIFI] Scanning networks...");
+  Serial.println("[WIFI] Fast connect failed. Scanning available networks...");
   int n = WiFi.scanNetworks();
 
   for (int i = 0; i < n; ++i) {
     String scannedSSID = WiFi.SSID(i);
     for (int p = 0; p < profileCount; p++) {
       LocationProfile* prof = g_profileManager.getProfile(p);
-      if (scannedSSID.equalsIgnoreCase(prof->ssid)) {
-        Serial.printf("[WIFI] Found saved network: %s. Connecting...\n", prof->ssid);
+      if (prof && scannedSSID.equalsIgnoreCase(prof->ssid)) {
+        Serial.printf("[WIFI] Found saved location profile: %s. Connecting...\n", prof->ssid);
         if (tryConnectWithUi(prof->ssid, prof->pass, show_ui)) {
           g_profileManager.setActiveIndex(p);
-
           services::location::set(prof->lat, prof->lon, prof->name);
-          Serial.printf("[LOCATION] Loaded Profile Coordinates: (%.6f, %.6f)\n", prof->lat, prof->lon);
           return true;
         }
       }
