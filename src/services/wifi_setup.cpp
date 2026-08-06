@@ -253,32 +253,26 @@ void markForceConfigPortal() {
   prefs.end();
 }
 
-bool consumeForceConfigPortal() {
+bool checkForceConfigPortal() {
   if (s_force_config_portal) {
-    s_force_config_portal = false;
-    Preferences prefs;
-    if (prefs.begin(kWifiPrefsNamespace, false)) {
-      prefs.remove(kPrefsForcePortalKey);
-      prefs.end();
-    }
     return true;
   }
-
   Preferences prefs;
   if (!prefs.begin(kWifiPrefsNamespace, true)) {
     return false;
   }
   const bool pending = prefs.getBool(kPrefsForcePortalKey, false);
   prefs.end();
-  if (!pending) {
-    return false;
-  }
+  return pending;
+}
 
+void clearForceConfigPortalFlag() {
+  s_force_config_portal = false;
+  Preferences prefs;
   if (prefs.begin(kWifiPrefsNamespace, false)) {
     prefs.remove(kPrefsForcePortalKey);
     prefs.end();
   }
-  return true;
 }
 
 void eraseWifiCredentials() {
@@ -458,12 +452,15 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
 
 bool openConfigPortal() {
   stopLanWebPortal();
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(50);
+  WiFi.disconnect();
+  delay(100);
+  
+  WiFi.mode(WIFI_AP_STA); // Enable AP + STA for captive portal
   statusScreenPortal();
+  
   s_wm.setConfigPortalBlocking(false);
   s_wm.startConfigPortal(config::kPortalApName);
+  
   while (s_wm.getConfigPortalActive()) {
     bootButtonPollLongPress();
     if (s_wm.process()) {
@@ -564,54 +561,38 @@ bool wifiSetupConnect() {
   bootButtonInit();
   ensureWifiManager();
 
-  const bool force_portal = consumeForceConfigPortal();
-  WiFi.setAutoReconnect(false);
+  const bool force_portal = checkForceConfigPortal();
 
+  // If user explicitly held BOOT button to reset credentials
   if (force_portal) {
+    Serial.println("[WIFI] Force portal requested. Opening setup portal...");
+    clearForceConfigPortalFlag();
     eraseWifiCredentials();
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-  }
-
-  if (force_portal) {
-    Serial.println("Opening WiFi setup portal (after reset)");
     if (openConfigPortal() && wifiLinkUp()) {
       WiFi.setAutoReconnect(true);
-      Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                    WiFi.localIP().toString().c_str());
       return true;
     }
-    Serial.println("WiFi connection failed");
-    statusScreenConnectFailed();
     return false;
   }
 
-  Serial.println("Connecting to WiFi (portal opens if needed)...");
+  Serial.println("[WIFI] Booting normally — checking saved networks...");
 
-  if (wifiLinkUp()) {
-    WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
-    return true;
-  }
-
+  // 1. Try saved profile scan first
   if (scanAndConnectSavedNetworks(true)) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
+    Serial.printf("[WIFI] Connected: %s | IP: %s\n", 
+                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
     return true;
   }
 
-  Serial.println("No saved network available — opening setup portal");
-
+  // 2. Fallback to portal ONLY if no saved networks were matched
+  Serial.println("[WIFI] No saved networks reachable — opening setup portal");
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
-    Serial.printf("Connected: %s  IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
     return true;
   }
 
-  Serial.println("WiFi connection failed");
+  Serial.println("[WIFI] Connection failed");
   statusScreenConnectFailed();
   return false;
 }
