@@ -30,6 +30,52 @@ unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 
+// Draw a cool 360-degree radar sweep loading animation
+void showRadarSweepLoading(const char* labelStr) {
+  // Center coordinates and radius tuned for the round GC9A01 (240x240)
+  const int16_t cx = 120;
+  const int16_t cy = 120;
+  const int16_t r  = 45;
+
+  // Background overlay box and outer radar grid lines
+  tft.fillRect(cx - r - 15, cy - r - 20, (r * 2) + 30, (r * 2) + 40, TFT_BLACK);
+  tft.drawCircle(cx, cy, r, TFT_DARKGREEN);
+  tft.drawCircle(cx, cy, r / 2, TFT_DARKGREEN);
+  tft.drawFastHLine(cx - r, cy, r * 2, TFT_DARKGREEN);
+  tft.drawFastVLine(cx, cy - r, r * 2, TFT_DARKGREEN);
+
+  // Label text above the radar circle (LovyanGFX modern font API)
+  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setFont(&fonts::Font2);
+  tft.drawString(labelStr, cx, cy - r - 16);
+
+  // Animate two full sweep rotations
+  for (int step = 0; step < 24; ++step) {
+    float angleRad = (step * 30.0f) * (3.14159f / 180.0f);
+    int16_t xLine = cx + static_cast<int16_t>(r * cos(angleRad));
+    int16_t yLine = cy + static_cast<int16_t>(r * sin(angleRad));
+
+    // Draw active sweep line
+    tft.drawLine(cx, cy, xLine, yLine, TFT_GREEN);
+
+    // Draw trailing dim line
+    float prevRad = ((step - 1) * 30.0f) * (3.14159f / 180.0f);
+    int16_t xPrev = cx + static_cast<int16_t>(r * cos(prevRad));
+    int16_t yPrev = cy + static_cast<int16_t>(r * sin(prevRad));
+    tft.drawLine(cx, cy, xPrev, yPrev, TFT_DARKGREEN);
+
+    delay(15);
+
+    // Clear active line back to dark grid format
+    tft.drawLine(cx, cy, xLine, yLine, TFT_BLACK);
+    tft.drawCircle(cx, cy, r, TFT_DARKGREEN);
+    tft.drawCircle(cx, cy, r / 2, TFT_DARKGREEN);
+    tft.drawFastHLine(cx - r, cy, r * 2, TFT_DARKGREEN);
+    tft.drawFastVLine(cx, cy - r, r * 2, TFT_DARKGREEN);
+  }
+}
+
 void syncLocationFromActiveProfile() {
   LocationProfile* prof = g_profileManager.getActiveProfile();
   if (prof) {
@@ -68,14 +114,19 @@ void handleBootButtonTap() {
 
   if (g_bootButtonMode == 0) {
     // Checkbox UNCHECKED: Cycle Distance / Range
+    showRadarSweepLoading("CHANGING RANGE");
+
     ui::radar::rangeNext();
     Serial.println("[Button] Switched Radar Range");
+
+    if (g_radar_visible) {
+      ui::radarDisplayDraw();
+      fetchAndDrawAircraft();
+    }
   } else {
     // Checkbox CHECKED: Cycle Location Profile (Skips profiles with Lat/Lon at 0.0)
     int totalProfiles = g_profileManager.getProfileCount();
     if (totalProfiles > 0) {
-      int startIndex = g_profileManager.getActiveIndex();
-
       for (int i = 0; i < totalProfiles; ++i) {
         g_profileManager.nextProfile();
         LocationProfile* prof = g_profileManager.getActiveProfile();
@@ -86,10 +137,18 @@ void handleBootButtonTap() {
         }
       }
 
+      LocationProfile* newProf = g_profileManager.getActiveProfile();
+      char msgBuf[32];
+      snprintf(msgBuf, sizeof(msgBuf), "LOC: %s", newProf ? newProf->name : "NEW");
+
+      // Play sweep animation with target location name
+      showRadarSweepLoading(msgBuf);
+
       syncLocationFromActiveProfile();
 
       // Refresh radar aircraft view for new location
       if (g_radar_visible) {
+        ui::radarDisplayDraw();
         fetchAndDrawAircraft();
       }
       Serial.println("[Button] Switched Location Profile");
