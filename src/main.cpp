@@ -161,31 +161,36 @@ void handleBootButtonTap() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println();
-  Serial.println("Plane Radar");
+  Serial.println("\nPlane Radar Starting...");
 
+  // 1. Initialize hardware peripherals and interrupt handlers first
   bootButtonInit();
   buttonHandlerInit();
   displayInit();
-  
-  // 1. Initialize Profile Manager before attempting Wi-Fi or portal screens
-  g_profileManager.begin();
-
-  // 2. Sync stored location coordinates into the location service
-  services::location::init();
-  syncLocationFromActiveProfile();
-
-  // 3. Launch portal screen if configured/requested
-  if (wifiShowsSetupScreenOnBoot()) {
-    statusScreenPortal();
-  }
-  
   ui::radar::rangeInit();
+
+  // 2. Initialize persistent storage & location subsystem
+  g_profileManager.begin();
+  services::location::init();
+
+  // 3. Register background WiFi processing loop for network calls
   services::adsb::setPollFn(wifiLoop);
 
-  // 4. Connect using profile credentials
+  // 4. Connect to WiFi or launch setup portal
+  // Note: wifiSetupConnect() manages its own status screens (connecting, portal, success/fail)
   if (wifiSetupConnect()) {
+    // Disable modem sleep to prevent AP/hotspot disconnections
+    WiFi.setSleep(WIFI_PS_NONE);
+    WiFi.setAutoReconnect(true);
+
+    // Sync radar range units & Active Profile location after connection stabilizes
+    syncLocationFromActiveProfile();
+
+    // 5. Render primary radar UI
     showRadarIfConnected();
+  } else {
+    Serial.println("[BOOT] WiFi setup failed or timed out.");
+    // Handles failure state display (e.g., statusScreenConnectFailed)
   }
 }
 

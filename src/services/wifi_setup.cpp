@@ -79,27 +79,27 @@ char s_loc_name_bufs[config::kMaxLocations][kNameParamLen + 1];
 char s_loc_lat_bufs[config::kMaxLocations][kCoordParamLen + 1];
 char s_loc_lon_bufs[config::kMaxLocations][kCoordParamLen + 1];
 
-// Parameter Pointers
-WiFiManagerParameter* s_param_loc_names[config::kMaxLocations];
-WiFiManagerParameter* s_param_loc_lats[config::kMaxLocations];
-WiFiManagerParameter* s_param_loc_lons[config::kMaxLocations];
-WiFiManagerParameter* s_loc_headers[config::kMaxLocations];
+// Change static object arrays to pointer arrays
+WiFiManagerParameter* s_param_loc_names[config::kMaxLocations] = {nullptr};
+WiFiManagerParameter* s_param_loc_lats[config::kMaxLocations]  = {nullptr};
+WiFiManagerParameter* s_param_loc_lons[config::kMaxLocations]  = {nullptr};
+WiFiManagerParameter* s_loc_headers[config::kMaxLocations]      = {nullptr};
 
 // Dynamic IDs and Headers
 char s_param_ids[config::kMaxLocations][3][16];
 char s_header_html[config::kMaxLocations][64];
 
-// Options
-char s_miles_checkbox_attrs[32] = "type=\"checkbox\"";
+// Checkbox Custom HTML Attributes
+char s_miles_checkbox_attrs[64] = "type=\"checkbox\"";
+char s_runways_checkbox_attrs[64] = "type=\"checkbox\"";
+char s_btn_mode_checkbox_attrs[64] = "type=\"checkbox\"";
+
 WiFiManagerParameter s_param_miles("use_miles", "Display distances in miles", "T", 2,
                                    s_miles_checkbox_attrs, WFM_LABEL_AFTER);
 
-char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
-// BOOT Button Checkbox Setup
-char s_btn_mode_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_btn_location("btn_cycle_location", "BOOT button cycles locations (instead of range)", "T", 2,
                                           s_btn_mode_checkbox_attrs, WFM_LABEL_AFTER);
 
@@ -167,11 +167,12 @@ void refreshPortalParamDefaults() {
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", config::kDefaultLocations[i].lon);
     } 
     else {
-      snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "");
+      s_loc_name_bufs[i][0] = '\0';
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "0.000000");
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "0.000000");
     }
 
+    // Change dot notation '.' to arrow notation '->'
     s_param_loc_names[i]->setValue(s_loc_name_bufs[i], kNameParamLen);
     s_param_loc_lats[i]->setValue(s_loc_lat_bufs[i], kCoordParamLen);
     s_param_loc_lons[i]->setValue(s_loc_lon_bufs[i], kCoordParamLen);
@@ -179,15 +180,12 @@ void refreshPortalParamDefaults() {
 
   snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
-  s_param_miles.setValue("T", 2);
 
-  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
-           "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
-  s_param_runways.setValue("T", 2);
+  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs), "type=\"checkbox\"%s",
+           ui::radar::showRunways() ? " checked" : "");
 
-  snprintf(s_btn_mode_checkbox_attrs, sizeof(s_btn_mode_checkbox_attrs),
-           "type=\"checkbox\"%s", (g_bootButtonMode == 1) ? " checked" : "");
-  s_param_btn_location.setValue("T", 2);
+  snprintf(s_btn_mode_checkbox_attrs, sizeof(s_btn_mode_checkbox_attrs), "type=\"checkbox\"%s",
+           (g_bootButtonMode == 1) ? " checked" : "");
 }
 
 void onPortalParamsSaved() {
@@ -197,11 +195,12 @@ void onPortalParamsSaved() {
   int previousActiveIndex = g_profileManager.getActiveIndex();
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
+    // Access values via pointer dereference
     const char* name = s_param_loc_names[i]->getValue();
     float lat = atof(s_param_loc_lats[i]->getValue());
     float lon = atof(s_param_loc_lons[i]->getValue());
 
-    if (strlen(name) > 0) {
+    if (name != nullptr && strlen(name) > 0) {
       g_profileManager.addOrUpdateProfile(name, name, activePass.c_str(), lat, lon);
     }
   }
@@ -220,7 +219,6 @@ void onPortalParamsSaved() {
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 
-  // Save boot button action from checkbox state
   bool cycleLocations = portalCheckboxChecked(s_param_btn_location.getValue());
   saveButtonModePreference(cycleLocations ? 1 : 0);
   Serial.printf("[WiFiManager] Saved Button Mode: %u (%s)\n", 
@@ -230,12 +228,13 @@ void onPortalParamsSaved() {
 void attachPortalParams(WiFiManager& wm) {
   refreshPortalParamDefaults();
 
-  for (int i = 0; i < config::kMaxLocations; ++i) {
-    wm.addParameter(s_loc_headers[i]);
-    wm.addParameter(s_param_loc_names[i]);
-    wm.addParameter(s_param_loc_lats[i]);
-    wm.addParameter(s_param_loc_lons[i]);
-  }
+// Pass pointers directly to WiFiManager
+for (int i = 0; i < config::kMaxLocations; ++i) {
+  wm.addParameter(s_loc_headers[i]);
+  wm.addParameter(s_param_loc_names[i]);
+  wm.addParameter(s_param_loc_lats[i]);
+  wm.addParameter(s_param_loc_lons[i]);
+}
 
   wm.addParameter(&s_param_miles);
   wm.addParameter(&s_param_runways);
@@ -285,16 +284,11 @@ bool consumeForceConfigPortal() {
 void eraseWifiCredentials() {
   stopLanWebPortal();
   WiFi.setAutoReconnect(false);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-
-  ensureWifiManager();
-  WiFi.persistent(true);
-  s_wm.resetSettings();
-  s_wm.erase();
   WiFi.disconnect(true, true);
-  WiFi.persistent(false);
-
+  
+  ensureWifiManager();
+  s_wm.resetSettings();
+  
   WiFi.mode(WIFI_OFF);
   delay(100);
 }
