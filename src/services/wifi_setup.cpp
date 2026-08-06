@@ -17,7 +17,7 @@
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
-// Boot button action state: 0 = Cycle Distance, 1 = Cycle Location
+// Boot button action state: 0 = Cycle Distance Range, 1 = Cycle Location Profile
 uint8_t g_bootButtonMode = 0; 
 
 // --- Boot Button ISR and Debounce State ---
@@ -89,7 +89,7 @@ WiFiManagerParameter* s_loc_headers[config::kMaxLocations];
 char s_param_ids[config::kMaxLocations][3][16];
 char s_header_html[config::kMaxLocations][64];
 
-// Unit & Display Options
+// Options
 char s_miles_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_miles("use_miles", "Display distances in miles", "T", 2,
                                    s_miles_checkbox_attrs, WFM_LABEL_AFTER);
@@ -98,9 +98,10 @@ char s_runways_checkbox_attrs[32] = "type=\"checkbox\"";
 WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T", 2,
                                      s_runways_checkbox_attrs, WFM_LABEL_AFTER);
 
-// BOOT Button Mode Option Pointer
-char s_btn_mode_html[256];
-WiFiManagerParameter* s_param_btn_mode = nullptr;
+// BOOT Button Checkbox Setup
+char s_btn_mode_checkbox_attrs[32] = "type=\"checkbox\"";
+WiFiManagerParameter s_param_btn_location("btn_cycle_location", "BOOT button cycles locations (instead of range)", "T", 2,
+                                          s_btn_mode_checkbox_attrs, WFM_LABEL_AFTER);
 
 void initLocationParameters() {
   static bool parametersInitialized = false;
@@ -129,10 +130,27 @@ void loadButtonModePreference() {
   }
 }
 
+void saveButtonModePreference(uint8_t mode) {
+  g_bootButtonMode = mode;
+  Preferences prefs;
+  if (prefs.begin(kWifiPrefsNamespace, false)) {
+    prefs.putUChar(kPrefsButtonModeKey, g_bootButtonMode);
+    prefs.end();
+  }
+}
+
+bool portalCheckboxChecked(const char* value) {
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+  if (value[0] == 'T' || value[0] == 't' || value[0] == '1') {
+    return true;
+  }
+  return (strcmp(value, "on") == 0 || strcmp(value, "true") == 0);
+}
+
 void refreshPortalParamDefaults() {
   initLocationParameters();
-  
-  // 1. Explicitly pull saved button mode from NVS before rendering HTML
   loadButtonModePreference();
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
@@ -162,33 +180,20 @@ void refreshPortalParamDefaults() {
   snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
   s_param_miles.setValue("T", 2);
-  
+
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
 
-  // 2. Construct HTML string with the matching option pre-selected
-  snprintf(s_btn_mode_html, sizeof(s_btn_mode_html),
-           "<hr><h3>Button Settings</h3>"
-           "<label for=\"btn_mode\">BOOT Button Tap Action</label>"
-           "<select name=\"btn_mode\" id=\"btn_mode\">"
-           "<option value=\"0\"%s>Cycle Distance Range</option>"
-           "<option value=\"1\"%s>Cycle Location Profile</option>"
-           "</select>",
-           (g_bootButtonMode == 0) ? " selected" : "",
-           (g_bootButtonMode == 1) ? " selected" : "");
-
-  if (s_param_btn_mode != nullptr) {
-    delete s_param_btn_mode;
-  }
-  s_param_btn_mode = new WiFiManagerParameter(s_btn_mode_html);
+  snprintf(s_btn_mode_checkbox_attrs, sizeof(s_btn_mode_checkbox_attrs),
+           "type=\"checkbox\"%s", (g_bootButtonMode == 1) ? " checked" : "");
+  s_param_btn_location.setValue("T", 2);
 }
 
 void onPortalParamsSaved() {
   String activeSSID = s_wm.getWiFiSSID();
   String activePass = s_wm.getWiFiPass();
 
-  // 1. Store the active profile index BEFORE updating profile contents
   int previousActiveIndex = g_profileManager.getActiveIndex();
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
@@ -201,7 +206,6 @@ void onPortalParamsSaved() {
     }
   }
 
-  // 2. Restore the original profile selection instead of defaulting to the last slot
   if (previousActiveIndex >= 0 && previousActiveIndex < g_profileManager.getProfileCount()) {
     g_profileManager.setActiveIndex(previousActiveIndex);
   } else {
@@ -213,21 +217,14 @@ void onPortalParamsSaved() {
     services::location::set(currentProf->lat, currentProf->lon, currentProf->name);
   }
 
-  // 3. Save portal options and button settings
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 
-  if (s_param_btn_mode != nullptr) {
-    const char* btnVal = s_param_btn_mode->getValue();
-    if (btnVal != nullptr) {
-      g_bootButtonMode = static_cast<uint8_t>(atoi(btnVal));
-      Preferences prefs;
-      if (prefs.begin(kWifiPrefsNamespace, false)) {
-        prefs.putUChar(kPrefsButtonModeKey, g_bootButtonMode);
-        prefs.end();
-      }
-    }
-  }
+  // Save boot button action from checkbox state
+  bool cycleLocations = portalCheckboxChecked(s_param_btn_location.getValue());
+  saveButtonModePreference(cycleLocations ? 1 : 0);
+  Serial.printf("[WiFiManager] Saved Button Mode: %u (%s)\n", 
+                g_bootButtonMode, cycleLocations ? "Cycle Locations" : "Cycle Range");
 }
 
 void attachPortalParams(WiFiManager& wm) {
@@ -242,9 +239,8 @@ void attachPortalParams(WiFiManager& wm) {
 
   wm.addParameter(&s_param_miles);
   wm.addParameter(&s_param_runways);
-  if (s_param_btn_mode != nullptr) {
-    wm.addParameter(s_param_btn_mode);
-  }
+  wm.addParameter(&s_param_btn_location);
+
   wm.setSaveParamsCallback(onPortalParamsSaved);
 }
 

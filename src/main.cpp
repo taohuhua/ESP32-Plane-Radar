@@ -67,21 +67,20 @@ void handleBootButtonTap() {
   }
 
   if (g_bootButtonMode == 0) {
-    // Mode 0: Cycle Distance / Range
+    // Checkbox UNCHECKED: Cycle Distance / Range
     ui::radar::rangeNext();
     Serial.println("[Button] Switched Radar Range");
   } else {
-    // Mode 1: Cycle Location Profile (Skips profiles with Lat/Lon at 0.0)
+    // Checkbox CHECKED: Cycle Location Profile (Skips profiles with Lat/Lon at 0.0)
     int totalProfiles = g_profileManager.getProfileCount();
     if (totalProfiles > 0) {
       int startIndex = g_profileManager.getActiveIndex();
-      int nextIdx = startIndex;
 
       for (int i = 0; i < totalProfiles; ++i) {
         g_profileManager.nextProfile();
         LocationProfile* prof = g_profileManager.getActiveProfile();
-        
-        // Stop if we find valid non-zero coordinates
+
+        // Stop if valid non-zero coordinates are found
         if (prof && (prof->lat != 0.0f || prof->lon != 0.0f)) {
           break;
         }
@@ -89,7 +88,7 @@ void handleBootButtonTap() {
 
       syncLocationFromActiveProfile();
 
-      // Refresh aircraft data immediately for new location coordinates
+      // Refresh radar aircraft view for new location
       if (g_radar_visible) {
         fetchAndDrawAircraft();
       }
