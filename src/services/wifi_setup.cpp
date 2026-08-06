@@ -115,7 +115,8 @@ void initLocationParameters() {
     snprintf(s_header_html[i], sizeof(s_header_html[i]), "<hr><h3>Location Preset %d</h3>", i + 1);
 
     s_loc_headers[i]     = new WiFiManagerParameter(s_header_html[i]);
-    s_param_loc_names[i] = new WiFiManagerParameter(s_param_ids[i][0], "SSID / Network Name", "", kNameParamLen);
+    // Changed label from "SSID" to "Location Name"
+    s_param_loc_names[i] = new WiFiManagerParameter(s_param_ids[i][0], "Location Name", "", kNameParamLen);
     s_param_loc_lats[i]  = new WiFiManagerParameter(s_param_ids[i][1], "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
     s_param_loc_lons[i]  = new WiFiManagerParameter(s_param_ids[i][2], "Longitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
   }
@@ -413,63 +414,14 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // Ensure WiFi stack is in Station mode so ESP32 reads cached NVS credentials
   WiFi.mode(WIFI_STA);
   delay(100);
 
-  // 1. Fast Path: Read cached NVS credentials or active profile
-  String storedSSID = WiFi.SSID();
-  String storedPass = WiFi.psk();
-
-  // If WiFi.SSID() is empty, check ProfileManager for active saved profile
-  if (storedSSID.length() == 0 && g_profileManager.getProfileCount() > 0) {
-    LocationProfile* activeProf = g_profileManager.getActiveProfile();
-    if (activeProf && strlen(activeProf->ssid) > 0) {
-      storedSSID = String(activeProf->ssid);
-      storedPass = String(activeProf->pass);
-    }
-  }
-
-  if (storedSSID.length() > 0) {
-    Serial.printf("[WIFI] Attempting connect to saved network: %s\n", storedSSID.c_str());
-    if (tryConnectWithUi(storedSSID, storedPass, show_ui)) {
-      int profileCount = g_profileManager.getProfileCount();
-      for (int i = 0; i < profileCount; ++i) {
-        LocationProfile* prof = g_profileManager.getProfile(i);
-        if (prof && storedSSID.equalsIgnoreCase(prof->ssid)) {
-          g_profileManager.setActiveIndex(i);
-          services::location::set(prof->lat, prof->lon, prof->name);
-          break;
-        }
-      }
+  // If ESP32 has saved Wi-Fi credentials in standard NVS, auto-connect directly
+  if (WiFi.SSID().length() > 0) {
+    Serial.printf("[WIFI] Auto-connecting to saved network: %s\n", WiFi.SSID().c_str());
+    if (tryConnectWithUi(WiFi.SSID(), WiFi.psk(), show_ui)) {
       return true;
-    }
-  }
-
-  // 2. Multi-SSID Fallback: Scan available Wi-Fi networks against ProfileManager
-  int profileCount = g_profileManager.getProfileCount();
-  if (profileCount == 0) {
-    return false;
-  }
-
-  WiFi.disconnect();
-  delay(100);
-
-  Serial.println("[WIFI] Fast connect failed. Scanning available networks...");
-  int n = WiFi.scanNetworks();
-
-  for (int i = 0; i < n; ++i) {
-    String scannedSSID = WiFi.SSID(i);
-    for (int p = 0; p < profileCount; p++) {
-      LocationProfile* prof = g_profileManager.getProfile(p);
-      if (prof && scannedSSID.equalsIgnoreCase(prof->ssid)) {
-        Serial.printf("[WIFI] Found saved location profile: %s. Connecting...\n", prof->ssid);
-        if (tryConnectWithUi(prof->ssid, prof->pass, show_ui)) {
-          g_profileManager.setActiveIndex(p);
-          services::location::set(prof->lat, prof->lon, prof->name);
-          return true;
-        }
-      }
     }
   }
 
@@ -589,11 +541,9 @@ bool wifiSetupConnect() {
 
   const bool force_portal = checkForceConfigPortal();
 
-  // Handle explicit long-press BOOT reset flag only
   if (force_portal) {
     Serial.println("[WIFI] Reset flag detected. Opening setup portal...");
     clearForceConfigPortalFlag();
-    eraseWifiCredentials();
     if (openConfigPortal() && wifiLinkUp()) {
       WiFi.setAutoReconnect(true);
       return true;
@@ -601,9 +551,9 @@ bool wifiSetupConnect() {
     return false;
   }
 
-  Serial.println("[WIFI] Normal boot — checking saved networks...");
+  Serial.println("[WIFI] Booting normally — connecting to Wi-Fi...");
 
-  // 1. Try connecting to saved networks (NVS + ProfileManager)
+  // 1. Connect to standard saved Wi-Fi network
   if (scanAndConnectSavedNetworks(true)) {
     WiFi.setAutoReconnect(true);
     Serial.printf("[WIFI] Connected: %s | IP: %s\n", 
@@ -611,8 +561,8 @@ bool wifiSetupConnect() {
     return true;
   }
 
-  // 2. Fall back to portal only if no stored networks are reachable
-  Serial.println("[WIFI] No saved networks reachable — launching portal");
+  // 2. Launch portal if Wi-Fi connection fails
+  Serial.println("[WIFI] Could not connect to saved Wi-Fi — opening setup portal");
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
     return true;
