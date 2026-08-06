@@ -190,38 +190,44 @@ void refreshPortalParamDefaults() {
 }
 
 void onPortalParamsSaved() {
-  String activeSSID = s_wm.getWiFiSSID();
-  String activePass = s_wm.getWiFiPass();
-
   int previousActiveIndex = g_profileManager.getActiveIndex();
 
+  // Save the 5 pure location presets by index slot
   for (int i = 0; i < config::kMaxLocations; ++i) {
-    // Access values via pointer dereference
-    const char* name = s_param_loc_names[i]->getValue();
-    float lat = atof(s_param_loc_lats[i]->getValue());
-    float lon = atof(s_param_loc_lons[i]->getValue());
+    if (s_param_loc_names[i] && s_param_loc_lats[i] && s_param_loc_lons[i]) {
+      const char* name = s_param_loc_names[i]->getValue();
+      const char* latStr = s_param_loc_lats[i]->getValue();
+      const char* lonStr = s_param_loc_lons[i]->getValue();
 
-    if (name != nullptr && strlen(name) > 0) {
-      g_profileManager.addOrUpdateProfile(name, name, activePass.c_str(), lat, lon);
+      if (name != nullptr && strlen(name) > 0) {
+        float lat = atof(latStr);
+        float lon = atof(lonStr);
+        g_profileManager.setProfileAt(i, name, lat, lon);
+      }
     }
   }
 
+  // Restore active index or fallback to index 0
   if (previousActiveIndex >= 0 && previousActiveIndex < g_profileManager.getProfileCount()) {
     g_profileManager.setActiveIndex(previousActiveIndex);
   } else {
     g_profileManager.setActiveIndex(0);
   }
 
+  // Sync active location coordinates to the radar service
   LocationProfile* currentProf = g_profileManager.getActiveProfile();
   if (currentProf) {
     services::location::set(currentProf->lat, currentProf->lon, currentProf->name);
   }
 
+  // Save custom radar portal parameters
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 
+  // Save button mode preference
   bool cycleLocations = portalCheckboxChecked(s_param_btn_location.getValue());
   saveButtonModePreference(cycleLocations ? 1 : 0);
+  
   Serial.printf("[WiFiManager] Saved Button Mode: %u (%s)\n", 
                 g_bootButtonMode, cycleLocations ? "Cycle Locations" : "Cycle Range");
 }
@@ -415,16 +421,38 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
   WiFi.mode(WIFI_STA);
-  delay(100);
+  delay(200); // Give ESP32 radio driver time to pull cached credentials from NVS
 
-  // If ESP32 has saved Wi-Fi credentials in standard NVS, auto-connect directly
-  if (WiFi.SSID().length() > 0) {
-    Serial.printf("[WIFI] Auto-connecting to saved network: %s\n", WiFi.SSID().c_str());
-    if (tryConnectWithUi(WiFi.SSID(), WiFi.psk(), show_ui)) {
-      return true;
-    }
+  String savedSSID = WiFi.SSID();
+  String savedPass = WiFi.psk();
+
+  if (savedSSID.length() == 0) {
+    Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
+    return false;
   }
 
+  Serial.printf("[WIFI] Found saved network: %s. Attempting connection...\n", savedSSID.c_str());
+  
+  if (show_ui) {
+    statusScreenConnectingBegin(savedSSID.c_str());
+  }
+
+  WiFi.begin(savedSSID.c_str(), savedPass.c_str());
+
+  // Wait up to 8 seconds for connection to succeed
+  unsigned long startAttempt = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 8000) {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    return true;
+  }
+
+  Serial.println("[WIFI] Connection attempt timed out.");
   return false;
 }
 

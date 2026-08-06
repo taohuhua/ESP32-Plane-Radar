@@ -9,8 +9,6 @@
 
 struct LocationProfile {
     char name[24];
-    char ssid[33];
-    char pass[64];
     float lat;
     float lon;
 };
@@ -29,35 +27,47 @@ public:
     }
 
     void loadProfiles() {
-        String json = prefs.getString("profiles_json", "[]");
-        JsonDocument doc; // ArduinoJson v7 syntax
-        DeserializationError err = deserializeJson(doc, json);
-
+        String json = prefs.getString("profiles_json", "");
         profileCount = 0;
-        if (!err && doc.is<JsonArray>()) {
-            JsonArray arr = doc.as<JsonArray>();
-            for (JsonObject obj : arr) {
-                if (profileCount >= MAX_LOCATION_PROFILES) break;
-                strlcpy(profiles[profileCount].name, obj["name"] | "Preset", sizeof(profiles[profileCount].name));
-                strlcpy(profiles[profileCount].ssid, obj["ssid"] | "", sizeof(profiles[profileCount].ssid));
-                strlcpy(profiles[profileCount].pass, obj["pass"] | "", sizeof(profiles[profileCount].pass));
-                profiles[profileCount].lat = obj["lat"] | -37.7281f; // Default Essendon area fallback
-                profiles[profileCount].lon = obj["lon"] | 144.9021f;
-                profileCount++;
+
+        if (json.length() > 0) {
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, json);
+
+            if (!err && doc.is<JsonArray>()) {
+                JsonArray arr = doc.as<JsonArray>();
+                for (JsonObject obj : arr) {
+                    if (profileCount >= MAX_LOCATION_PROFILES) break;
+                    strlcpy(profiles[profileCount].name, obj["name"] | "Preset", sizeof(profiles[profileCount].name));
+                    profiles[profileCount].lat = obj["lat"] | -37.7281f;
+                    profiles[profileCount].lon = obj["lon"] | 144.9021f;
+                    profileCount++;
+                }
             }
         }
-        activeIndex = prefs.getInt("active_idx", profileCount > 0 ? 0 : -1);
+
+        // Initialize default location preset if NVS is fresh/empty
+        if (profileCount == 0) {
+            strlcpy(profiles[0].name, "Default Location", sizeof(profiles[0].name));
+            profiles[0].lat = -37.8136f; // Default Melbourne / Essendon region
+            profiles[0].lon = 144.9631f;
+            profileCount = 1;
+            saveProfiles();
+        }
+
+        activeIndex = prefs.getInt("active_idx", 0);
+        if (activeIndex < 0 || activeIndex >= profileCount) {
+            activeIndex = 0;
+        }
     }
 
     void saveProfiles() {
-        JsonDocument doc; // ArduinoJson v7 syntax
+        JsonDocument doc;
         JsonArray arr = doc.to<JsonArray>();
 
         for (int i = 0; i < profileCount; i++) {
             JsonObject obj = arr.add<JsonObject>();
             obj["name"] = profiles[i].name;
-            obj["ssid"] = profiles[i].ssid;
-            obj["pass"] = profiles[i].pass;
             obj["lat"] = profiles[i].lat;
             obj["lon"] = profiles[i].lon;
         }
@@ -68,7 +78,7 @@ public:
         prefs.putInt("active_idx", activeIndex);
     }
 
-    // Cycles to the next available profile in the array
+    // Cycle to next available location preset
     LocationProfile* nextProfile() {
         if (profileCount <= 0) return nullptr;
         
@@ -80,44 +90,25 @@ public:
         return &profiles[activeIndex];
     }
 
-    bool addOrUpdateProfile(const char* name, const char* ssid, const char* pass, float lat, float lon) {
-        for (int i = 0; i < profileCount; i++) {
-            if (strcmp(profiles[i].ssid, ssid) == 0) {
-                strlcpy(profiles[i].name, name, sizeof(profiles[i].name));
-                strlcpy(profiles[i].pass, pass, sizeof(profiles[i].pass));
-                profiles[i].lat = lat;
-                profiles[i].lon = lon;
-                activeIndex = i;
-                saveProfiles();
-                return true;
-            }
-        }
-        if (profileCount < MAX_LOCATION_PROFILES) {
-            strlcpy(profiles[profileCount].name, name, sizeof(profiles[profileCount].name));
-            strlcpy(profiles[profileCount].ssid, ssid, sizeof(profiles[profileCount].ssid));
-            strlcpy(profiles[profileCount].pass, pass, sizeof(profiles[profileCount].pass));
-            profiles[profileCount].lat = lat;
-            profiles[profileCount].lon = lon;
-            activeIndex = profileCount;
-            profileCount++;
-            saveProfiles();
-            return true;
-        }
-        return false;
-    }
+    // Set or update a location preset by index slot (0 to 4)
+    bool setProfileAt(int index, const char* name, float lat, float lon) {
+        if (index < 0 || index >= MAX_LOCATION_PROFILES) return false;
 
-    void deleteProfile(int index) {
-        if (index < 0 || index >= profileCount) return;
-        for (int i = index; i < profileCount - 1; i++) {
-            profiles[i] = profiles[i + 1];
+        strlcpy(profiles[index].name, name, sizeof(profiles[index].name));
+        profiles[index].lat = lat;
+        profiles[index].lon = lon;
+
+        if (index >= profileCount) {
+            profileCount = index + 1;
         }
-        profileCount--;
-        if (activeIndex >= profileCount) activeIndex = profileCount - 1;
+
         saveProfiles();
+        return true;
     }
 
     int getProfileCount() const { return profileCount; }
     int getActiveIndex() const { return activeIndex; }
+    
     void setActiveIndex(int idx) { 
         if (idx >= 0 && idx < profileCount) {
             activeIndex = idx; 
