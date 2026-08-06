@@ -131,24 +131,23 @@ void loadButtonModePreference() {
 
 void refreshPortalParamDefaults() {
   initLocationParameters();
+  
+  // 1. Explicitly pull saved button mode from NVS before rendering HTML
   loadButtonModePreference();
 
   for (int i = 0; i < config::kMaxLocations; ++i) {
     LocationProfile* prof = g_profileManager.getProfile(i);
 
-    // 1. Check if profile exists and has a non-empty name and non-zero lat/lon
     if (prof && strlen(prof->name) > 0 && (prof->lat != 0.0f || prof->lon != 0.0f)) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", prof->name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", prof->lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", prof->lon);
     } 
-    // 2. Fall back to config.h defaults if valid index exists
     else if (i < (int)(sizeof(config::kDefaultLocations) / sizeof(config::kDefaultLocations[0]))) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", config::kDefaultLocations[i].name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", config::kDefaultLocations[i].lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", config::kDefaultLocations[i].lon);
     } 
-    // 3. Blank fields for unused slots
     else {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "");
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "0.000000");
@@ -163,19 +162,21 @@ void refreshPortalParamDefaults() {
   snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
   s_param_miles.setValue("T", 2);
+  
   snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs),
            "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
   s_param_runways.setValue("T", 2);
 
+  // 2. Construct HTML string with the matching option pre-selected
   snprintf(s_btn_mode_html, sizeof(s_btn_mode_html),
            "<hr><h3>Button Settings</h3>"
            "<label for=\"btn_mode\">BOOT Button Tap Action</label>"
            "<select name=\"btn_mode\" id=\"btn_mode\">"
-           "<option value=\"0\" %s>Cycle Distance Range</option>"
-           "<option value=\"1\" %s>Cycle Location Profile</option>"
+           "<option value=\"0\"%s>Cycle Distance Range</option>"
+           "<option value=\"1\"%s>Cycle Location Profile</option>"
            "</select>",
-           (g_bootButtonMode == 0) ? "selected" : "",
-           (g_bootButtonMode == 1) ? "selected" : "");
+           (g_bootButtonMode == 0) ? " selected" : "",
+           (g_bootButtonMode == 1) ? " selected" : "");
 
   if (s_param_btn_mode != nullptr) {
     delete s_param_btn_mode;
@@ -187,6 +188,9 @@ void onPortalParamsSaved() {
   String activeSSID = s_wm.getWiFiSSID();
   String activePass = s_wm.getWiFiPass();
 
+  // 1. Store the active profile index BEFORE updating profile contents
+  int previousActiveIndex = g_profileManager.getActiveIndex();
+
   for (int i = 0; i < config::kMaxLocations; ++i) {
     const char* name = s_param_loc_names[i]->getValue();
     float lat = atof(s_param_loc_lats[i]->getValue());
@@ -197,12 +201,19 @@ void onPortalParamsSaved() {
     }
   }
 
-  int activeIndex = g_profileManager.getActiveIndex();
-  LocationProfile* currentProf = g_profileManager.getProfile(activeIndex);
+  // 2. Restore the original profile selection instead of defaulting to the last slot
+  if (previousActiveIndex >= 0 && previousActiveIndex < g_profileManager.getProfileCount()) {
+    g_profileManager.setActiveIndex(previousActiveIndex);
+  } else {
+    g_profileManager.setActiveIndex(0);
+  }
+
+  LocationProfile* currentProf = g_profileManager.getActiveProfile();
   if (currentProf) {
     services::location::set(currentProf->lat, currentProf->lon, currentProf->name);
   }
 
+  // 3. Save portal options and button settings
   ui::radar::saveMilesFromPortal(s_param_miles.getValue());
   ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
 

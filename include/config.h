@@ -64,10 +64,10 @@ struct RadarLocation {
 // Default preset locations (Wyndham, Essendon, etc.)
 constexpr RadarLocation kDefaultLocations[kMaxLocations] = {
     {"Essendon Airport", -37.7281, 144.9021},
-    {"MEL",          -37.8136, 144.9631},
-    {"Tulla",         -37.6637,   144.8448},
-    {"Location 4",         0.0000,   0.0000},
-    {"Location 5",         0.0000,   0.0000}
+    {"Melbourne", -37.81878, 144.95153},
+    {"Tullamarine Airport", -37.6637, 144.8448},
+    {"Avalon Airport", -38.0370, 144.4683},
+    {"Location 5", 0.0000, 0.0000}
 };
 
 // --- Multi-SSID Profile Limits ---

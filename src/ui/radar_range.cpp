@@ -51,12 +51,16 @@ bool portalCheckboxChecked(const char* value) {
   if (value == nullptr || value[0] == '\0') {
     return false;
   }
-  // WiFiManager checkbox submits its value= attribute ("T", or "F" if we prefilled F).
-  if ((value[0] == 'T' || value[0] == 't' || value[0] == 'F' || value[0] == 'f') &&
-      value[1] == '\0') {
+  
+  // WiFiManager HTML forms return "T", "true", "on", or "1" when checked.
+  if (value[0] == 'T' || value[0] == 't' || value[0] == '1') {
     return true;
   }
-  return strcmp(value, "on") == 0;
+  if (strcmp(value, "on") == 0 || strcmp(value, "true") == 0) {
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -122,9 +126,12 @@ void formatCurrentRing3Label(char* buf, size_t len) {
 void unitsReset() {
   s_use_miles = false;
   s_show_runways = true;
+  s_range_index = kDefaultRangeIndex;
+  
   if (s_prefs.begin(kPrefsNamespace, false)) {
     s_prefs.remove(kPrefsMilesKey);
     s_prefs.remove(kPrefsRunwaysKey);
+    s_prefs.remove(kPrefsRangeKey);
     s_prefs.end();
   }
 }
