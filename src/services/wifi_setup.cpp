@@ -209,7 +209,7 @@ snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs),
 void onPortalParamsSaved() {
   int previousActiveIndex = g_profileManager.getActiveIndex();
 
-  // Save the 5 pure location presets by index slot
+  // Save the location presets by index slot
   for (int i = 0; i < config::kMaxLocations; ++i) {
     if (s_param_loc_names[i] && s_param_loc_lats[i] && s_param_loc_lons[i]) {
       const char* name = s_param_loc_names[i]->getValue();
@@ -238,15 +238,17 @@ void onPortalParamsSaved() {
   }
 
   // Save custom radar portal parameters
-  ui::radar::saveMilesFromPortal(s_param_miles.getValue());
-  ui::radar::saveRunwaysFromPortal(s_param_runways.getValue());
+  ui::radar::saveMilesFromPortal(s_wm.server->hasArg("use_miles") ? "T" : "");
+  ui::radar::saveRunwaysFromPortal(s_wm.server->hasArg("show_runways") ? "T" : "");
 
-  // Save button mode preference
-  bool cycleLocations = portalCheckboxChecked(s_param_btn_location.getValue());
-  saveButtonModePreference(cycleLocations ? 1 : 0);
+  // Check HTTP POST arguments directly (Unchecked boxes omit the parameter entirely)
+  bool cycleLocations = s_wm.server->hasArg("btn_cycle_location");
+  
+  // Persist directly to NVS
+  setBootButtonMode(cycleLocations ? 1 : 0);
   
   Serial.printf("[WiFiManager] Saved Button Mode: %u (%s)\n", 
-                g_bootButtonMode, cycleLocations ? "Cycle Locations" : "Cycle Range");
+                getBootButtonMode(), cycleLocations ? "Cycle Locations" : "Cycle Range");
 }
 
 void attachPortalParams(WiFiManager& wm) {
