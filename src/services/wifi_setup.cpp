@@ -424,18 +424,11 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Enable persistent storage and set STA mode
-  WiFi.persistent(true);
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE);
-  delay(100);
-
-  // 2. Retrieve credentials directly from WiFiManager's NVS storage
+  // 1. Check stored credentials via WiFiManager & ESP NVS fallback
   s_wm.setDebugOutput(false);
   String savedSSID = s_wm.getWiFiSSID();
   String savedPass = s_wm.getWiFiPass();
 
-  // Fallback to core WiFi.SSID() if s_wm returns empty
   if (savedSSID.length() == 0) {
     savedSSID = WiFi.SSID();
     savedPass = WiFi.psk();
@@ -449,33 +442,47 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     return false;
   }
 
+  const char* ui_ssid = savedSSID.c_str();
   if (show_ui) {
-    statusScreenConnectingBegin(savedSSID.c_str());
+    statusScreenConnectingBegin(ui_ssid);
   }
 
-  // 3. Disconnect soft state without wiping NVS memory
-  WiFi.disconnect(false, false);
-  delay(100);
+  // 2. Multi-attempt loop with complete baseband reset on failure
+  const uint8_t maxAttempts = 3;
+  for (uint8_t attempt = 1; attempt <= maxAttempts; ++attempt) {
+    if (attempt > 1) {
+      Serial.printf("[WIFI] Connect retry %u/%u...\n", attempt, maxAttempts);
+      WiFi.disconnect(true, false);
+      WiFi.mode(WIFI_OFF);
+      delay(300);
+    }
 
-  // 4. Connect explicitly with retrieved SSID and Password
-  WiFi.begin(savedSSID.c_str(), savedPass.c_str());
-
-  // 5. Connection wait loop
-  unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
-    bootButtonPollLongPress();
-    statusScreenConnectingTick();
+    // Configure station mode for ESP32-C3
+    WiFi.persistent(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(WIFI_PS_NONE);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     delay(100);
-    Serial.print(".");
-  }
-  Serial.println();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
-    return true;
+    WiFi.begin(savedSSID.c_str(), savedPass.c_str());
+
+    // 6-second wait window per attempt (18s total across 3 attempts)
+    unsigned long startAttempt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 6000) {
+      bootButtonPollLongPress();
+      statusScreenConnectingTick();
+      delay(100);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+      return true;
+    }
   }
 
-  Serial.println("[WIFI] Connection attempt timed out.");
+  Serial.println("[WIFI] Connection attempts timed out.");
   return false;
 }
 
