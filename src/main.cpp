@@ -163,24 +163,23 @@ void handleBootButtonTap() {
     Serial.printf("[Button] Cycling location... Total profiles available: %d\n", totalProfiles);
 
     if (totalProfiles > 0) {
+    // Try advancing up to totalProfiles times to find a valid non-zero preset
       for (int i = 0; i < totalProfiles; ++i) {
         g_profileManager.nextProfile();
         LocationProfile* prof = g_profileManager.getActiveProfile();
 
-        // Stop if valid non-zero coordinates are found
+        // If valid, stop here
         if (prof && (prof->lat != 0.0f || prof->lon != 0.0f)) {
           break;
         }
       }
 
       syncLocationFromActiveProfile();
-
-      // Refresh radar aircraft view for new location
+      
       if (g_radar_visible) {
         ui::radarDisplayDraw();
         fetchAndDrawAircraft();
       }
-      Serial.println("[Button] Switched Location Profile");
     } else {
       Serial.println("[Button] Warning: No profiles available to switch.");
     }
@@ -196,7 +195,7 @@ void testNvsPersistence() {
   
   // 1. Open the "wifi" or "profile" namespace in read/write mode (false)
   if (!prefs.begin("wifi", false)) {
-    Serial.println("[NVS TEST] ❌ FAILED: Could not open Preferences namespace!");
+    Serial.println("[NVS TEST] FAILED: Could not open Preferences namespace!");
     return;
   }
 
@@ -210,7 +209,7 @@ void testNvsPersistence() {
   // 4. Always close the namespace to commit writes to flash
   prefs.end();
 
-  Serial.printf("[NVS TEST] ✅ Success! Boot Count persistent value: %u\n", bootCount);
+  Serial.printf("[NVS TEST] Success! Boot Count persistent value: %u\n", bootCount);
 }
 
 void setup() {
