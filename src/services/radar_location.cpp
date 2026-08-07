@@ -1,108 +1,52 @@
 #include "services/radar_location.h"
+
 #include <Arduino.h>
-#include <Preferences.h>
-#include <cstdlib>
 #include "config.h"
+#include "services/profile_manager.h"
+
+extern ProfileManager g_profileManager;
 
 namespace services {
 namespace location {
 
 namespace {
-const char* kPrefsNamespace = "radar_loc";
-const char* kKeyActiveIdx = "active_idx";
-
 size_t s_active_index = 0;
-config::RadarLocation s_locations[config::kMaxLocations];
-
-void loadDefaults() {
-  for (size_t i = 0; i < config::kMaxLocations; ++i) {
-    s_locations[i] = config::kDefaultLocations[i];
-  }
-}
-
-void loadFromPreferences() {
-  Preferences prefs;
-  if (!prefs.begin(kPrefsNamespace, true)) {
-    loadDefaults();
-    return;
-  }
-
-  s_active_index = prefs.getUInt(kKeyActiveIdx, 0);
-  if (s_active_index >= config::kMaxLocations) {
-    s_active_index = 0;
-  }
-
-  for (size_t i = 0; i < config::kMaxLocations; ++i) {
-    char key_lat[16], key_lon[16], key_name[16];
-    snprintf(key_lat, sizeof(key_lat), "lat_%zu", i);
-    snprintf(key_lon, sizeof(key_lon), "lon_%zu", i);
-    snprintf(key_name, sizeof(key_name), "name_%zu", i);
-
-    s_locations[i].lat = prefs.getDouble(key_lat, config::kDefaultLocations[i].lat);
-    s_locations[i].lon = prefs.getDouble(key_lon, config::kDefaultLocations[i].lon);
-    
-    String stored_name = prefs.getString(key_name, config::kDefaultLocations[i].name);
-    snprintf(s_locations[i].name, sizeof(s_locations[i].name), "%s", stored_name.c_str());
-  }
-
-  prefs.end();
-}
-
-void saveActiveIndex() {
-  Preferences prefs;
-  if (prefs.begin(kPrefsNamespace, false)) {
-    prefs.putUInt(kKeyActiveIdx, s_active_index);
-    prefs.end();
-  }
-}
-
 }  // namespace
 
 void init() {
-  loadDefaults();
-  loadFromPreferences();
+  s_active_index = g_profileManager.getActiveIndex();
 }
 
-double lat() { return s_locations[s_active_index].lat; }
-double lon() { return s_locations[s_active_index].lon; }
-const char* name() { return s_locations[s_active_index].name; }
-size_t currentIndex() { return s_active_index; }
-size_t count() { return config::kMaxLocations; }
+double lat() { 
+  LocationProfile* prof = g_profileManager.getProfile(s_active_index);
+  return prof ? prof->lat : config::kDefaultLocations[0].lat; 
+}
+
+double lon() { 
+  LocationProfile* prof = g_profileManager.getProfile(s_active_index);
+  return prof ? prof->lon : config::kDefaultLocations[0].lon; 
+}
+
+const char* name() { 
+  LocationProfile* prof = g_profileManager.getProfile(s_active_index);
+  return prof ? prof->name : config::kDefaultLocations[0].name; 
+}
+
+size_t currentIndex() { return g_profileManager.getActiveIndex(); }
+size_t count() { return g_profileManager.getProfileCount(); }
 
 void setIndex(size_t index) {
-  if (index >= config::kMaxLocations) {
-    index = 0;
-  }
-  s_active_index = index;
-  saveActiveIndex();
+  g_profileManager.setActiveIndex(index);
+  s_active_index = g_profileManager.getActiveIndex();
 }
 
 void next() {
-  s_active_index = (s_active_index + 1) % config::kMaxLocations;
-  saveActiveIndex();
+  g_profileManager.nextProfile();
+  s_active_index = g_profileManager.getActiveIndex();
 }
 
 void set(double latitude, double longitude, const char* location_name) {
-  s_locations[s_active_index].lat = latitude;
-  s_locations[s_active_index].lon = longitude;
-  if (location_name && location_name[0] != '\0') {
-    snprintf(s_locations[s_active_index].name, sizeof(s_locations[s_active_index].name), "%s", location_name);
-  } else {
-    snprintf(s_locations[s_active_index].name, sizeof(s_locations[s_active_index].name), "Custom");
-  }
-
-  Preferences prefs;
-  if (prefs.begin(kPrefsNamespace, false)) {
-    char key_lat[16], key_lon[16], key_name[16];
-    snprintf(key_lat, sizeof(key_lat), "lat_%zu", s_active_index);
-    snprintf(key_lon, sizeof(key_lon), "lon_%zu", s_active_index);
-    snprintf(key_name, sizeof(key_name), "name_%zu", s_active_index);
-
-    prefs.putDouble(key_lat, s_locations[s_active_index].lat);
-    prefs.putDouble(key_lon, s_locations[s_active_index].lon);
-    prefs.putString(key_name, s_locations[s_active_index].name);
-    prefs.end();
-  }
+  g_profileManager.setProfileAt(s_active_index, location_name, latitude, longitude);
 }
 
 bool saveFromStrings(const char* lat_str, const char* lon_str) {
@@ -123,14 +67,18 @@ bool saveFromStrings(const char* lat_str, const char* lon_str) {
 }
 
 void clear() {
-  loadDefaults();
-  s_active_index = 0;
-
-  Preferences prefs;
-  if (prefs.begin(kPrefsNamespace, false)) {
-    prefs.clear();
-    prefs.end();
+  // Reset profiles to default configurations
+  for (size_t i = 0; i < config::kMaxLocations; ++i) {
+    if (i < (sizeof(config::kDefaultLocations) / sizeof(config::kDefaultLocations[0]))) {
+      g_profileManager.setProfileAt(i, config::kDefaultLocations[i].name, 
+                                    config::kDefaultLocations[i].lat, 
+                                    config::kDefaultLocations[i].lon);
+    } else {
+      g_profileManager.setProfileAt(i, "", 0.0f, 0.0f);
+    }
   }
+  g_profileManager.setActiveIndex(0);
+  s_active_index = 0;
 }
 
 }  // namespace location

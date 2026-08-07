@@ -157,28 +157,32 @@ void refreshPortalParamDefaults() {
   for (int i = 0; i < config::kMaxLocations; ++i) {
     LocationProfile* prof = g_profileManager.getProfile(i);
 
+    // 1. Try reading from ProfileManager JSON store
     if (prof && strlen(prof->name) > 0 && (prof->lat != 0.0f || prof->lon != 0.0f)) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", prof->name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", prof->lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", prof->lon);
     } 
+    // 2. Fall back to hardcoded config defaults
     else if (i < (int)(sizeof(config::kDefaultLocations) / sizeof(config::kDefaultLocations[0]))) {
       snprintf(s_loc_name_bufs[i], sizeof(s_loc_name_bufs[i]), "%s", config::kDefaultLocations[i].name);
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "%.6f", config::kDefaultLocations[i].lat);
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "%.6f", config::kDefaultLocations[i].lon);
     } 
+    // 3. Blank slot fallback
     else {
       s_loc_name_bufs[i][0] = '\0';
       snprintf(s_loc_lat_bufs[i], sizeof(s_loc_lat_bufs[i]), "0.000000");
       snprintf(s_loc_lon_bufs[i], sizeof(s_loc_lon_bufs[i]), "0.000000");
     }
 
-    // Change dot notation '.' to arrow notation '->'
-    s_param_loc_names[i]->setValue(s_loc_name_bufs[i], kNameParamLen);
-    s_param_loc_lats[i]->setValue(s_loc_lat_bufs[i], kCoordParamLen);
-    s_param_loc_lons[i]->setValue(s_loc_lon_bufs[i], kCoordParamLen);
+    // Assign buffer pointers to WiFiManager Custom HTML Parameters
+    if (s_param_loc_names[i]) s_param_loc_names[i]->setValue(s_loc_name_bufs[i], kNameParamLen);
+    if (s_param_loc_lats[i])  s_param_loc_lats[i]->setValue(s_loc_lat_bufs[i], kCoordParamLen);
+    if (s_param_loc_lons[i])  s_param_loc_lons[i]->setValue(s_loc_lon_bufs[i], kCoordParamLen);
   }
 
+  // Set up Portal Checkboxes
   snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
            ui::radar::useMiles() ? " checked" : "");
 
@@ -421,17 +425,18 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
   WiFi.mode(WIFI_STA);
-  delay(200); // Give ESP32 radio driver time to pull cached credentials from NVS
+  delay(200);
 
-  String savedSSID = WiFi.SSID();
-  String savedPass = WiFi.psk();
+  // Ask WiFiManager for the saved SSID in NVS
+  String savedSSID = s_wm.getWiFiSSID();
+  String savedPass = s_wm.getWiFiPass();
 
   if (savedSSID.length() == 0) {
     Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
     return false;
   }
 
-  Serial.printf("[WIFI] Found saved network: %s. Attempting connection...\n", savedSSID.c_str());
+  Serial.printf("[WIFI] Found saved network: %s. Connecting...\n", savedSSID.c_str());
   
   if (show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
@@ -439,9 +444,9 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
 
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // Wait up to 8 seconds for connection to succeed
+  // Wait up to 10 seconds for initial router association
   unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 8000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
     delay(250);
     Serial.print(".");
   }
