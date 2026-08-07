@@ -424,14 +424,22 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Force STA mode and disable power saving
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(WIFI_PS_NONE); 
   delay(100);
 
-  // 2. Read directly from ESP32 NVS partition BEFORE any disconnect call
-  String savedSSID = WiFi.SSID();
-  String savedPass = WiFi.psk();
+  // Initialize WiFiManager internal state to read stored credentials
+  s_wm.setDebugOutput(false);
+  
+  // Retrieve saved credentials through WiFiManager
+  String savedSSID = s_wm.getWiFiSSID();
+  String savedPass = s_wm.getWiFiPass();
+
+  // Fallback to core ESP32 NVS if WiFiManager returns empty
+  if (savedSSID.length() == 0) {
+    savedSSID = WiFi.SSID();
+    savedPass = WiFi.psk();
+  }
 
   Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
                 savedSSID.c_str(), savedPass.length());
@@ -445,14 +453,14 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // 3. Clear soft connection state without wiping NVS memory
+  // Clear soft connection state without erasing credentials
   WiFi.disconnect(false, false); 
   delay(100);
 
-  // 4. Begin connection
+  // Pass retrieved credentials explicitly
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // 5. Wait for connection
+  // Wait up to 20 seconds
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
     bootButtonPollLongPress();
