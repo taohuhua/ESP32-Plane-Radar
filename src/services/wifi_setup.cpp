@@ -424,22 +424,12 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Force a complete Wi-Fi reset to clear lingering AP/STA state
-  WiFi.persistent(false);
-  WiFi.disconnect(true, false); 
-  WiFi.mode(WIFI_OFF);
-  delay(200);
-
-  // 2. Set clean STA mode and disable power saving
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE); 
-  delay(200);
-
-  // 3. Read saved credentials from WiFiManager
+  // 1. Read stored credentials FIRST while SDK state is intact
   s_wm.setDebugOutput(false);
   String savedSSID = s_wm.getWiFiSSID();
   String savedPass = s_wm.getWiFiPass();
 
+  // Fallback to core ESP32 NVS if WiFiManager returns empty
   if (savedSSID.length() == 0) {
     savedSSID = WiFi.SSID();
     savedPass = WiFi.psk();
@@ -453,11 +443,21 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     return false;
   }
 
+  // 2. Reset radio registers safely AFTER retrieving credentials
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+
+  // 3. Set clean STA mode and disable power saving for ESP32-C3
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(WIFI_PS_NONE); 
+  delay(100);
+
   if (show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // 4. Connect using explicit credentials
+  // 4. Begin connection with retrieved strings
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
   // 5. Connection wait loop
