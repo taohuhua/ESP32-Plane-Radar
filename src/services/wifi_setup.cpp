@@ -424,43 +424,37 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Read stored credentials FIRST while SDK state is intact
-  s_wm.setDebugOutput(false);
-  String savedSSID = s_wm.getWiFiSSID();
-  String savedPass = s_wm.getWiFiPass();
+  // 1. Enable persistent storage so NVS credentials load correctly
+  WiFi.persistent(true);
+  
+  // 2. Set clean STA mode
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(WIFI_PS_NONE); 
+  delay(100);
 
-  // Fallback to core ESP32 NVS if WiFiManager returns empty
-  if (savedSSID.length() == 0) {
-    savedSSID = WiFi.SSID();
-    savedPass = WiFi.psk();
-  }
+  // 3. Check saved SSID directly from core ESP32 NVS
+  String savedSSID = WiFi.SSID();
 
-  Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
-                savedSSID.c_str(), savedPass.length());
+  Serial.printf("[WIFI] NVS SSID: '%s'\n", savedSSID.c_str());
 
   if (savedSSID.length() == 0) {
     Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
     return false;
   }
 
-  // 2. Reset radio registers safely AFTER retrieving credentials
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-
-  // 3. Set clean STA mode and disable power saving for ESP32-C3
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE); 
-  delay(100);
-
   if (show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // 4. Begin connection with retrieved strings
-  WiFi.begin(savedSSID.c_str(), savedPass.c_str());
+  // 4. Disconnect soft state without wiping NVS memory
+  WiFi.disconnect(false, false); 
+  delay(100);
 
-  // 5. Connection wait loop
+  // 5. Calling WiFi.begin() without parameters tells the ESP32 driver
+  // to fetch the encrypted SSID/PSK directly from its hardware NVS partition
+  WiFi.begin();
+
+  // 6. Connection wait loop
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
     bootButtonPollLongPress();
