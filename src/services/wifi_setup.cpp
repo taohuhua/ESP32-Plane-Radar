@@ -424,18 +424,22 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
+  // 1. Force a complete Wi-Fi reset to clear lingering AP/STA state
+  WiFi.persistent(false);
+  WiFi.disconnect(true, false); 
+  WiFi.mode(WIFI_OFF);
+  delay(200);
+
+  // 2. Set clean STA mode and disable power saving
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(WIFI_PS_NONE); 
-  delay(100);
+  delay(200);
 
-  // Initialize WiFiManager internal state to read stored credentials
+  // 3. Read saved credentials from WiFiManager
   s_wm.setDebugOutput(false);
-  
-  // Retrieve saved credentials through WiFiManager
   String savedSSID = s_wm.getWiFiSSID();
   String savedPass = s_wm.getWiFiPass();
 
-  // Fallback to core ESP32 NVS if WiFiManager returns empty
   if (savedSSID.length() == 0) {
     savedSSID = WiFi.SSID();
     savedPass = WiFi.psk();
@@ -453,14 +457,10 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // Clear soft connection state without erasing credentials
-  WiFi.disconnect(false, false); 
-  delay(100);
-
-  // Pass retrieved credentials explicitly
+  // 4. Connect using explicit credentials
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // Wait up to 20 seconds
+  // 5. Connection wait loop
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
     bootButtonPollLongPress();
