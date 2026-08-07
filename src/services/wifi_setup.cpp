@@ -424,34 +424,43 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
+  // 1. Force STA mode and disable power saving
   WiFi.mode(WIFI_STA);
-  delay(200);
+  WiFi.setSleep(WIFI_PS_NONE); 
+  delay(100);
 
-  // Ask WiFiManager for the saved SSID in NVS
-  String savedSSID = s_wm.getWiFiSSID();
-  String savedPass = s_wm.getWiFiPass();
+  // ❌ OLD (broken):
+  // String savedSSID = s_wm.getWiFiSSID();
+  // String savedPass = s_wm.getWiFiPass();
 
-// Add this debug print:
+  // ✅ NEW: Read directly from ESP32 NVS partition
+  String savedSSID = WiFi.SSID();
+  String savedPass = WiFi.psk();
+
   Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
                 savedSSID.c_str(), savedPass.length());
-
 
   if (savedSSID.length() == 0) {
     Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
     return false;
   }
 
-  Serial.printf("[WIFI] Found saved network: %s. Connecting...\n", savedSSID.c_str());
-  
   if (show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
+  // 2. Clear old state
+  WiFi.disconnect(true, true);
+  delay(200);
+
+  // 3. Begin connection with valid NVS credentials
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // Wait up to 20 seconds for initial router association
+  // 4. Wait up to 20 seconds
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
+    bootButtonPollLongPress();
+    statusScreenConnectingTick();
     delay(100);
     Serial.print(".");
   }
