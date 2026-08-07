@@ -429,11 +429,7 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
   WiFi.setSleep(WIFI_PS_NONE); 
   delay(100);
 
-  // ❌ OLD (broken):
-  // String savedSSID = s_wm.getWiFiSSID();
-  // String savedPass = s_wm.getWiFiPass();
-
-  // ✅ NEW: Read directly from ESP32 NVS partition
+  // 2. Read directly from ESP32 NVS partition BEFORE any disconnect call
   String savedSSID = WiFi.SSID();
   String savedPass = WiFi.psk();
 
@@ -449,14 +445,14 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // 2. Clear old state
-  WiFi.disconnect(true, true);
-  delay(200);
+  // 3. Clear soft connection state without wiping NVS memory
+  WiFi.disconnect(false, false); 
+  delay(100);
 
-  // 3. Begin connection with valid NVS credentials
+  // 4. Begin connection
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // 4. Wait up to 20 seconds
+  // 5. Wait for connection
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
     bootButtonPollLongPress();
