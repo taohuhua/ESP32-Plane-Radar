@@ -424,18 +424,25 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
 }
 
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Enable persistent storage so NVS credentials load correctly
+  // 1. Enable persistent storage and set STA mode
   WiFi.persistent(true);
-  
-  // 2. Set clean STA mode
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(WIFI_PS_NONE); 
+  WiFi.setSleep(WIFI_PS_NONE);
   delay(100);
 
-  // 3. Check saved SSID directly from core ESP32 NVS
-  String savedSSID = WiFi.SSID();
+  // 2. Retrieve credentials directly from WiFiManager's NVS storage
+  s_wm.setDebugOutput(false);
+  String savedSSID = s_wm.getWiFiSSID();
+  String savedPass = s_wm.getWiFiPass();
 
-  Serial.printf("[WIFI] NVS SSID: '%s'\n", savedSSID.c_str());
+  // Fallback to core WiFi.SSID() if s_wm returns empty
+  if (savedSSID.length() == 0) {
+    savedSSID = WiFi.SSID();
+    savedPass = WiFi.psk();
+  }
+
+  Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
+                savedSSID.c_str(), savedPass.length());
 
   if (savedSSID.length() == 0) {
     Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
@@ -446,15 +453,14 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     statusScreenConnectingBegin(savedSSID.c_str());
   }
 
-  // 4. Disconnect soft state without wiping NVS memory
-  WiFi.disconnect(false, false); 
+  // 3. Disconnect soft state without wiping NVS memory
+  WiFi.disconnect(false, false);
   delay(100);
 
-  // 5. Calling WiFi.begin() without parameters tells the ESP32 driver
-  // to fetch the encrypted SSID/PSK directly from its hardware NVS partition
-  WiFi.begin();
+  // 4. Connect explicitly with retrieved SSID and Password
+  WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // 6. Connection wait loop
+  // 5. Connection wait loop
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000) {
     bootButtonPollLongPress();
