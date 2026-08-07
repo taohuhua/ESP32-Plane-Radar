@@ -444,10 +444,10 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
 
   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 
-  // Wait up to 10 seconds for initial router association
+  // Wait up to 15 seconds for initial router association
   unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-    delay(250);
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
+    delay(100);
     Serial.print(".");
   }
   Serial.println();
