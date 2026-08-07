@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 
 /** True when the next boot should show the setup screen first (after credential reset). */
 bool wifiShowsSetupScreenOnBoot();
@@ -16,3 +17,6 @@ void bootButtonInit();
 bool bootButtonConsumeTap();
 /** Call each loop iteration; triggers WiFi reset on long hold. */
 void bootButtonPollLongPress();
+// Boot button mode helpers (0 = Distance Range, 1 = Location Profile)
+uint8_t getBootButtonMode();
+void setBootButtonMode(uint8_t mode);

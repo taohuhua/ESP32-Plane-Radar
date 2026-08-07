@@ -30,12 +30,17 @@ unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 
-// Draw a full-screen, slowed 360-degree radar sweep loading animation
+// Draw a full-screen radar sweep with a 2-stage dimming phosphorescent tail
 void showRadarSweepLoading(const char* labelStr) {
   // Center coordinates and radius scaled for full 240x240 GC9A01 panel
   const int16_t cx = 120;
   const int16_t cy = 120;
   const int16_t r  = 120; 
+
+  // Define custom 16-bit RGB565 colors for the multi-stage trailing tail
+  const uint16_t COLOR_SWEEP_BEAM = TFT_GREEN;       // Bright active beam
+  const uint16_t COLOR_TRAIL_MID  = TFT_DARKGREEN;   // Medium fade (step - 1)
+  const uint16_t COLOR_TRAIL_DIM  = 0x0280;          // Very dark green for faint tail (step - 2)
 
   // Clear full display background
   tft.fillScreen(TFT_BLACK);
@@ -47,7 +52,7 @@ void showRadarSweepLoading(const char* labelStr) {
   tft.drawFastHLine(0, cy, 240, TFT_DARKGREEN);
   tft.drawFastVLine(cx, 0, 240, TFT_DARKGREEN);
 
-  // Center banner for the label text so it remains crisp over grid lines
+  // Text banner setup
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.setFont(&fonts::Font2);
@@ -56,30 +61,37 @@ void showRadarSweepLoading(const char* labelStr) {
   tft.fillRect(cx - 70, bannerY - 2, 140, 20, TFT_BLACK);
   tft.drawString(labelStr, cx, bannerY);
 
-  // Animate two full sweep rotations with a slower delay (40ms step interval)
   constexpr int kTotalSteps = 24;
-  constexpr int kStepDelayMs = 40; // Increased delay to slow down the sweep
+  constexpr int kStepDelayMs = 60; 
+  constexpr float kStepAngleRad = (360.0f / kTotalSteps) * (3.14159f / 180.0f);
 
-  for (int rotation = 0; rotation < 2; ++rotation) {
+  for (int rotation = 0; rotation < 1; ++rotation) {
     for (int step = 0; step < kTotalSteps; ++step) {
-      float angleRad = (step * (360.0f / kTotalSteps)) * (3.14159f / 180.0f);
+      // 1. Primary active sweep beam (brightest green)
+      float angleRad = step * kStepAngleRad;
       int16_t xLine = cx + static_cast<int16_t>(r * cos(angleRad));
       int16_t yLine = cy + static_cast<int16_t>(r * sin(angleRad));
 
-      // Draw active sweep line
-      tft.drawLine(cx, cy, xLine, yLine, TFT_GREEN);
+      // 2. Primary tail line (medium green, 1 step behind)
+      float prevRad1 = (step - 1) * kStepAngleRad;
+      int16_t xPrev1 = cx + static_cast<int16_t>(r * cos(prevRad1));
+      int16_t yPrev1 = cy + static_cast<int16_t>(r * sin(prevRad1));
 
-      // Draw trailing dim line
-      float prevRad = ((step - 1) * (360.0f / kTotalSteps)) * (3.14159f / 180.0f);
-      int16_t xPrev = cx + static_cast<int16_t>(r * cos(prevRad));
-      int16_t yPrev = cy + static_cast<int16_t>(r * sin(prevRad));
-      tft.drawLine(cx, cy, xPrev, yPrev, TFT_DARKGREEN);
+      // 3. Secondary tail line (faint/dark green, 2 steps behind)
+      float prevRad2 = (step - 2) * kStepAngleRad;
+      int16_t xPrev2 = cx + static_cast<int16_t>(r * cos(prevRad2));
+      int16_t yPrev2 = cy + static_cast<int16_t>(r * sin(prevRad2));
+
+      // Draw active beam & multi-stage phosphor trails
+      tft.drawLine(cx, cy, xLine, yLine, COLOR_SWEEP_BEAM);
+      tft.drawLine(cx, cy, xPrev1, yPrev1, COLOR_TRAIL_MID);
+      tft.drawLine(cx, cy, xPrev2, yPrev2, COLOR_TRAIL_DIM);
 
       delay(kStepDelayMs);
 
-      // Clear active line back to dark grid format
-      tft.drawLine(cx, cy, xLine, yLine, TFT_BLACK);
-      
+      // Clear the trailing tip (step - 2 line) back to black before redrawing grid
+      tft.drawLine(cx, cy, xPrev2, yPrev2, TFT_BLACK);
+
       // Redraw grid elements cut by line clearing
       tft.drawCircle(cx, cy, r - 1, TFT_DARKGREEN);
       tft.drawCircle(cx, cy, (r * 2) / 3, TFT_DARKGREEN);
@@ -130,10 +142,14 @@ void handleBootButtonTap() {
     return;
   }
 
-  if (g_bootButtonMode == 0) {
-    // Checkbox UNCHECKED: Cycle Distance / Range
-    showRadarSweepLoading("CHANGING RANGE");
+  // Trigger the sweep animation
+  showRadarSweepLoading("SWITCHING...");
 
+  uint8_t mode = getBootButtonMode();
+  Serial.printf("[Button] Tap detected. Boot Button Mode: %d\n", mode);
+
+  if (mode == 0) {
+    // Checkbox UNCHECKED: Cycle Distance / Range
     ui::radar::rangeNext();
     Serial.println("[Button] Switched Radar Range");
 
@@ -142,8 +158,10 @@ void handleBootButtonTap() {
       fetchAndDrawAircraft();
     }
   } else {
-    // Checkbox CHECKED: Cycle Location Profile (Skips profiles with Lat/Lon at 0.0)
+    // Checkbox CHECKED: Cycle Location Profile
     int totalProfiles = g_profileManager.getProfileCount();
+    Serial.printf("[Button] Cycling location... Total profiles available: %d\n", totalProfiles);
+
     if (totalProfiles > 0) {
       for (int i = 0; i < totalProfiles; ++i) {
         g_profileManager.nextProfile();
@@ -155,13 +173,6 @@ void handleBootButtonTap() {
         }
       }
 
-      LocationProfile* newProf = g_profileManager.getActiveProfile();
-      char msgBuf[32];
-      snprintf(msgBuf, sizeof(msgBuf), "LOC: %s", newProf ? newProf->name : "NEW");
-
-      // Play sweep animation with target location name
-      showRadarSweepLoading(msgBuf);
-
       syncLocationFromActiveProfile();
 
       // Refresh radar aircraft view for new location
@@ -170,6 +181,8 @@ void handleBootButtonTap() {
         fetchAndDrawAircraft();
       }
       Serial.println("[Button] Switched Location Profile");
+    } else {
+      Serial.println("[Button] Warning: No profiles available to switch.");
     }
   }
 }

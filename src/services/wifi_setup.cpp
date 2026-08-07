@@ -1,4 +1,5 @@
 #include "services/wifi_setup.h"
+#include <Preferences.h>
 
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -17,8 +18,26 @@
 #include "ui/radar_range.h"
 #include "ui/status_screens.h"
 
-// Boot button action state: 0 = Cycle Distance Range, 1 = Cycle Location Profile
-uint8_t g_bootButtonMode = 0; 
+// Define the static variable before referencing it
+static uint8_t g_bootButtonMode = 0;
+
+uint8_t getBootButtonMode() {
+  Preferences prefs;
+  if (prefs.begin("wifi_config", true)) {
+    g_bootButtonMode = prefs.getUChar("boot_mode", 0);
+    prefs.end();
+  }
+  return g_bootButtonMode;
+}
+
+void setBootButtonMode(uint8_t mode) {
+  g_bootButtonMode = mode;
+  Preferences prefs;
+  if (prefs.begin("wifi_config", false)) {
+    prefs.putUChar("boot_mode", g_bootButtonMode);
+    prefs.end();
+  }
+}
 
 // --- Boot Button ISR and Debounce State ---
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -124,20 +143,11 @@ void initLocationParameters() {
 }
 
 void loadButtonModePreference() {
-  Preferences prefs;
-  if (prefs.begin(kWifiPrefsNamespace, true)) {
-    g_bootButtonMode = prefs.getUChar(kPrefsButtonModeKey, 0);
-    prefs.end();
-  }
+  getBootButtonMode(); // Calls getBootButtonMode which loads from "wifi_config"
 }
 
 void saveButtonModePreference(uint8_t mode) {
-  g_bootButtonMode = mode;
-  Preferences prefs;
-  if (prefs.begin(kWifiPrefsNamespace, false)) {
-    prefs.putUChar(kPrefsButtonModeKey, g_bootButtonMode);
-    prefs.end();
-  }
+  setBootButtonMode(mode); // Calls setBootButtonMode which saves to "wifi_config"
 }
 
 bool portalCheckboxChecked(const char* value) {
@@ -608,7 +618,9 @@ void wifiLoop() {
 }
 
 bool wifiSetupConnect() {
-  bootButtonInit();
+  // Read saved boot button mode from NVS
+  getBootButtonMode();
+
   ensureWifiManager();
 
   const bool force_portal = checkForceConfigPortal();
@@ -625,7 +637,7 @@ bool wifiSetupConnect() {
 
   Serial.println("[WIFI] Booting normally — connecting to Wi-Fi...");
 
-  // 1. Connect to standard saved Wi-Fi network
+  // Connect to standard saved Wi-Fi network
   if (scanAndConnectSavedNetworks(true)) {
     WiFi.setAutoReconnect(true);
     Serial.printf("[WIFI] Connected: %s | IP: %s\n", 
@@ -633,7 +645,7 @@ bool wifiSetupConnect() {
     return true;
   }
 
-  // 2. Launch portal if Wi-Fi connection fails
+  // Launch portal if Wi-Fi connection fails
   Serial.println("[WIFI] Could not connect to saved Wi-Fi — opening setup portal");
   if (openConfigPortal() && wifiLinkUp()) {
     WiFi.setAutoReconnect(true);
