@@ -48,7 +48,7 @@ public:
 
         // Initialize default location preset if NVS is fresh/empty
         if (profileCount == 0) {
-            strlcpy(profiles[0].name, "Default Location", sizeof(profiles[0].name));
+            strlcpy(profiles[0].name, "Melbourne", sizeof(profiles[0].name));
             profiles[0].lat = -37.8136f; // Default Melbourne / Essendon region
             profiles[0].lon = 144.9631f;
             profileCount = 1;

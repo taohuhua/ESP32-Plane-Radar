@@ -431,6 +431,11 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
   String savedSSID = s_wm.getWiFiSSID();
   String savedPass = s_wm.getWiFiPass();
 
+// Add this debug print:
+  Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
+                savedSSID.c_str(), savedPass.length());
+
+
   if (savedSSID.length() == 0) {
     Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
     return false;
