@@ -30,49 +30,67 @@ unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 
-// Draw a cool 360-degree radar sweep loading animation
+// Draw a full-screen, slowed 360-degree radar sweep loading animation
 void showRadarSweepLoading(const char* labelStr) {
-  // Center coordinates and radius tuned for the round GC9A01 (240x240)
+  // Center coordinates and radius scaled for full 240x240 GC9A01 panel
   const int16_t cx = 120;
   const int16_t cy = 120;
-  const int16_t r  = 45;
+  const int16_t r  = 120; 
 
-  // Background overlay box and outer radar grid lines
-  tft.fillRect(cx - r - 15, cy - r - 20, (r * 2) + 30, (r * 2) + 40, TFT_BLACK);
-  tft.drawCircle(cx, cy, r, TFT_DARKGREEN);
-  tft.drawCircle(cx, cy, r / 2, TFT_DARKGREEN);
-  tft.drawFastHLine(cx - r, cy, r * 2, TFT_DARKGREEN);
-  tft.drawFastVLine(cx, cy - r, r * 2, TFT_DARKGREEN);
+  // Clear full display background
+  tft.fillScreen(TFT_BLACK);
 
-  // Label text above the radar circle (LovyanGFX modern font API)
+  // Outer edge and inner range rings
+  tft.drawCircle(cx, cy, r - 1, TFT_DARKGREEN);
+  tft.drawCircle(cx, cy, (r * 2) / 3, TFT_DARKGREEN);
+  tft.drawCircle(cx, cy, r / 3, TFT_DARKGREEN);
+  tft.drawFastHLine(0, cy, 240, TFT_DARKGREEN);
+  tft.drawFastVLine(cx, 0, 240, TFT_DARKGREEN);
+
+  // Center banner for the label text so it remains crisp over grid lines
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.setFont(&fonts::Font2);
-  tft.drawString(labelStr, cx, cy - r - 16);
+  
+  const int16_t bannerY = 40;
+  tft.fillRect(cx - 70, bannerY - 2, 140, 20, TFT_BLACK);
+  tft.drawString(labelStr, cx, bannerY);
 
-  // Animate two full sweep rotations
-  for (int step = 0; step < 24; ++step) {
-    float angleRad = (step * 30.0f) * (3.14159f / 180.0f);
-    int16_t xLine = cx + static_cast<int16_t>(r * cos(angleRad));
-    int16_t yLine = cy + static_cast<int16_t>(r * sin(angleRad));
+  // Animate two full sweep rotations with a slower delay (40ms step interval)
+  constexpr int kTotalSteps = 24;
+  constexpr int kStepDelayMs = 40; // Increased delay to slow down the sweep
 
-    // Draw active sweep line
-    tft.drawLine(cx, cy, xLine, yLine, TFT_GREEN);
+  for (int rotation = 0; rotation < 2; ++rotation) {
+    for (int step = 0; step < kTotalSteps; ++step) {
+      float angleRad = (step * (360.0f / kTotalSteps)) * (3.14159f / 180.0f);
+      int16_t xLine = cx + static_cast<int16_t>(r * cos(angleRad));
+      int16_t yLine = cy + static_cast<int16_t>(r * sin(angleRad));
 
-    // Draw trailing dim line
-    float prevRad = ((step - 1) * 30.0f) * (3.14159f / 180.0f);
-    int16_t xPrev = cx + static_cast<int16_t>(r * cos(prevRad));
-    int16_t yPrev = cy + static_cast<int16_t>(r * sin(prevRad));
-    tft.drawLine(cx, cy, xPrev, yPrev, TFT_DARKGREEN);
+      // Draw active sweep line
+      tft.drawLine(cx, cy, xLine, yLine, TFT_GREEN);
 
-    delay(15);
+      // Draw trailing dim line
+      float prevRad = ((step - 1) * (360.0f / kTotalSteps)) * (3.14159f / 180.0f);
+      int16_t xPrev = cx + static_cast<int16_t>(r * cos(prevRad));
+      int16_t yPrev = cy + static_cast<int16_t>(r * sin(prevRad));
+      tft.drawLine(cx, cy, xPrev, yPrev, TFT_DARKGREEN);
 
-    // Clear active line back to dark grid format
-    tft.drawLine(cx, cy, xLine, yLine, TFT_BLACK);
-    tft.drawCircle(cx, cy, r, TFT_DARKGREEN);
-    tft.drawCircle(cx, cy, r / 2, TFT_DARKGREEN);
-    tft.drawFastHLine(cx - r, cy, r * 2, TFT_DARKGREEN);
-    tft.drawFastVLine(cx, cy - r, r * 2, TFT_DARKGREEN);
+      delay(kStepDelayMs);
+
+      // Clear active line back to dark grid format
+      tft.drawLine(cx, cy, xLine, yLine, TFT_BLACK);
+      
+      // Redraw grid elements cut by line clearing
+      tft.drawCircle(cx, cy, r - 1, TFT_DARKGREEN);
+      tft.drawCircle(cx, cy, (r * 2) / 3, TFT_DARKGREEN);
+      tft.drawCircle(cx, cy, r / 3, TFT_DARKGREEN);
+      tft.drawFastHLine(0, cy, 240, TFT_DARKGREEN);
+      tft.drawFastVLine(cx, 0, 240, TFT_DARKGREEN);
+
+      // Refresh label text banner
+      tft.fillRect(cx - 70, bannerY - 2, 140, 20, TFT_BLACK);
+      tft.drawString(labelStr, cx, bannerY);
+    }
   }
 }
 

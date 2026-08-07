@@ -182,15 +182,18 @@ void refreshPortalParamDefaults() {
     if (s_param_loc_lons[i])  s_param_loc_lons[i]->setValue(s_loc_lon_bufs[i], kCoordParamLen);
   }
 
-  // Set up Portal Checkboxes
-  snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), "type=\"checkbox\"%s",
-           ui::radar::useMiles() ? " checked" : "");
+snprintf(s_miles_checkbox_attrs, sizeof(s_miles_checkbox_attrs), 
+           "type=\"checkbox\"%s", ui::radar::useMiles() ? " checked" : "");
 
-  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs), "type=\"checkbox\"%s",
-           ui::radar::showRunways() ? " checked" : "");
+  snprintf(s_runways_checkbox_attrs, sizeof(s_runways_checkbox_attrs), 
+           "type=\"checkbox\"%s", ui::radar::showRunways() ? " checked" : "");
 
-  snprintf(s_btn_mode_checkbox_attrs, sizeof(s_btn_mode_checkbox_attrs), "type=\"checkbox\"%s",
-           (g_bootButtonMode == 1) ? " checked" : "");
+  // Match the runway pattern exactly:
+  snprintf(s_btn_mode_checkbox_attrs, sizeof(s_btn_mode_checkbox_attrs), 
+           "type=\"checkbox\"%s", (g_bootButtonMode == 1) ? " checked" : "");
+           
+  // Force WiFiManager to refresh the parameter's initial value string
+  s_param_btn_location.setValue((g_bootButtonMode == 1) ? "T" : "", 2);
 }
 
 void onPortalParamsSaved() {
@@ -336,6 +339,9 @@ void ensureWifiManager() {
                            IPAddress(255, 255, 255, 0));
   s_wm.setHostname(config::kPortalHostname);
   s_wm.setAPCallback(onConfigPortalApStarted);
+  
+  // Refresh defaults before attach
+  refreshPortalParamDefaults();
   attachPortalParams(s_wm);
   s_wm_configured = true;
 }
