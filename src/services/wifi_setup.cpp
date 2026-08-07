@@ -423,22 +423,39 @@ bool tryConnectWithUi(const String& ssid, const String& pass, bool show_ui) {
   return false;
 }
 
+// Helper function from matixyo to verify NVS storage safely
+bool storedWifiCredentials() {
+  wifi_mode_t mode = WIFI_MODE_NULL;
+  if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
+    WiFi.mode(WIFI_STA);
+    delay(50);
+  }
+
+  wifi_config_t conf = {};
+  if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) {
+    return false;
+  }
+  return conf.sta.ssid[0] != '\0';
+}
+
 bool scanAndConnectSavedNetworks(bool show_ui) {
-  // 1. Check stored credentials via WiFiManager & ESP NVS fallback
-  s_wm.setDebugOutput(false);
+  // 1. Ensure WiFiManager is fully initialized FIRST so internal buffers work
+  ensureWifiManager();
+
+  // 2. Check low-level hardware NVS for saved credentials
+  if (!storedWifiCredentials()) {
+    Serial.println("[WIFI] No valid saved Wi-Fi credentials in hardware NVS.");
+    return false;
+  }
+
+  // 3. Fetch strings safely from initialized WiFiManager
   String savedSSID = s_wm.getWiFiSSID();
   String savedPass = s_wm.getWiFiPass();
-
-  if (savedSSID.length() == 0) {
-    savedSSID = WiFi.SSID();
-    savedPass = WiFi.psk();
-  }
 
   Serial.printf("[WIFI] NVS SSID: '%s' | Password Length: %d\n", 
                 savedSSID.c_str(), savedPass.length());
 
   if (savedSSID.length() == 0) {
-    Serial.println("[WIFI] No saved Wi-Fi credentials found in NVS.");
     return false;
   }
 
@@ -447,36 +464,27 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
     statusScreenConnectingBegin(ui_ssid);
   }
 
-  // 2. Multi-attempt loop with complete baseband reset on failure
-  const uint8_t maxAttempts = 3;
+  // 4. Retry loop using matixyo's radio reset technique
+  const uint8_t maxAttempts = config::kWifiConnectAttempts;
   for (uint8_t attempt = 1; attempt <= maxAttempts; ++attempt) {
     if (attempt > 1) {
       Serial.printf("[WIFI] Connect retry %u/%u...\n", attempt, maxAttempts);
-      WiFi.disconnect(true, false);
+      WiFi.disconnect(true);
       WiFi.mode(WIFI_OFF);
-      delay(300);
+      delay(400);
     }
 
-    // Configure station mode for ESP32-C3
-    WiFi.persistent(true);
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(WIFI_PS_NONE);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    delay(100);
+    // Prepare STA mode and disable sleep
+    prepareSta();
 
-    WiFi.begin(savedSSID.c_str(), savedPass.c_str());
-
-    // 6-second wait window per attempt (18s total across 3 attempts)
-    unsigned long startAttempt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 6000) {
-      bootButtonPollLongPress();
-      statusScreenConnectingTick();
-      delay(100);
-      Serial.print(".");
+    if (savedSSID.length() > 0) {
+      WiFi.begin(savedSSID.c_str(), savedPass.c_str());
+    } else {
+      WiFi.begin();
     }
-    Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    // Wait for connection
+    if (waitForLinkWithUi(ui_ssid, config::kWifiConnectAttemptMs)) {
       Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
       return true;
     }
