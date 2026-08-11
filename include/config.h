@@ -73,6 +73,9 @@ constexpr RadarLocation kDefaultLocations[kMaxLocations] = {
 // --- Multi-SSID Profile Limits ---
 constexpr size_t kMaxLocationProfiles = 5;
 
+/** Rotating "recently connected" SSID list shown in the portal (most-recent-first). */
+constexpr size_t kMaxSsidHistory = 3;
+
 /** Poll adsb.fi (API public limit: 1 req/s). */
 constexpr unsigned long kAdsbFetchIntervalMs = 3000;
 /** Legacy scale unused — fetch uses radar::fetchRadiusKm() to screen edge. */

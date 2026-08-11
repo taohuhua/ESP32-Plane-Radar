@@ -78,15 +78,29 @@ public:
         prefs.putInt("active_idx", activeIndex);
     }
 
-    // Cycle to next available location preset
+    // Cycle to next available location preset, skipping any slot whose
+    // lat/lon are both 0 (i.e. unset). If every other slot is unset, stays
+    // on the current one.
     LocationProfile* nextProfile() {
         if (profileCount <= 0) return nullptr;
-        
+
         if (profileCount > 1) {
-            activeIndex = (activeIndex + 1) % profileCount;
-            saveProfiles();
+            const int start = activeIndex;
+            int idx = start;
+            bool changed = false;
+            for (int tries = 0; tries < profileCount; ++tries) {
+                idx = (idx + 1) % profileCount;
+                if (idx == start) break;  // wrapped all the way around
+                const LocationProfile& p = profiles[idx];
+                if (p.lat != 0.0f || p.lon != 0.0f) {
+                    activeIndex = idx;
+                    changed = true;
+                    break;
+                }
+            }
+            if (changed) saveProfiles();
         }
-        
+
         return &profiles[activeIndex];
     }
 

@@ -46,45 +46,6 @@ int performGetWithPoll(HTTPClient& http) {
   return HTTPC_ERROR_READ_TIMEOUT;
 }
 
-bool readResponseBodyWithPoll(HTTPClient& http, String& payload) {
-  WiFiClient* stream = http.getStreamPtr();
-  if (stream == nullptr) {
-    return false;
-  }
-
-  const int content_length = http.getSize();
-  if (content_length > 0) {
-    payload.reserve(static_cast<unsigned>(content_length + 1));
-  }
-
-  uint8_t buffer[512];
-  const unsigned long deadline = millis() + kRequestTimeoutMs;
-  while (millis() < deadline) {
-    pollNetwork();
-    const int available = stream->available();
-    if (available > 0) {
-      const int to_read =
-          available > static_cast<int>(sizeof(buffer)) ? static_cast<int>(sizeof(buffer))
-                                                       : available;
-      const int read_bytes = stream->readBytes(buffer, to_read);
-      if (read_bytes > 0) {
-        payload.concat(reinterpret_cast<const char*>(buffer),
-                       static_cast<unsigned>(read_bytes));
-      }
-    }
-    if (content_length > 0 &&
-        static_cast<int>(payload.length()) >= content_length) {
-      break;
-    }
-    if (!http.connected() && stream->available() <= 0) {
-      break;
-    }
-    delay(1);
-  }
-
-  return payload.length() > 0;
-}
-
 float kmToNauticalMiles(float km) { return km / kKmPerNm; }
 
 bool readJsonFloat(const JsonObject& obj, const char* key, float* out) {
@@ -97,49 +58,27 @@ bool readJsonFloat(const JsonObject& obj, const char* key, float* out) {
 
 float pickNoseHeading(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "true_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "mag_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "track", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "dir", &v)) {
-    return v;
-  }
+  if (readJsonFloat(plane, "true_heading", &v)) return v;
+  if (readJsonFloat(plane, "mag_heading", &v)) return v;
+  if (readJsonFloat(plane, "track", &v)) return v;
+  if (readJsonFloat(plane, "dir", &v)) return v;
   return 0.0f;
 }
 
 float pickTrackHeading(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "track", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "true_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "mag_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "dir", &v)) {
-    return v;
-  }
+  if (readJsonFloat(plane, "track", &v)) return v;
+  if (readJsonFloat(plane, "true_heading", &v)) return v;
+  if (readJsonFloat(plane, "mag_heading", &v)) return v;
+  if (readJsonFloat(plane, "dir", &v)) return v;
   return 0.0f;
 }
 
 float pickGroundSpeed(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "gs", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "tas", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "ias", &v)) {
-    return v;
-  }
+  if (readJsonFloat(plane, "gs", &v)) return v;
+  if (readJsonFloat(plane, "tas", &v)) return v;
+  if (readJsonFloat(plane, "ias", &v)) return v;
   return 0.0f;
 }
 
@@ -167,9 +106,7 @@ void copyJsonStringTrimmed(const JsonObject& obj, const char* key, char* out,
 
 void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
   out[0] = '\0';
-  if (out_len == 0) {
-    return;
-  }
+  if (out_len == 0) return;
 
   if (plane["alt_baro"].is<const char*>()) {
     const char* s = plane["alt_baro"].as<const char*>();
@@ -232,16 +169,30 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     return false;
   }
 
-  String payload;
-  if (!readResponseBodyWithPoll(http, payload)) {
-    Serial.println("adsb: empty response");
-    http.end();
-    return false;
-  }
+  // Define JSON Filter to save >70% heap RAM during parsing
+  JsonDocument filter;
+  filter["ac"][0]["lat"] = true;
+  filter["ac"][0]["lon"] = true;
+  filter["ac"][0]["true_heading"] = true;
+  filter["ac"][0]["mag_heading"] = true;
+  filter["ac"][0]["track"] = true;
+  filter["ac"][0]["dir"] = true;
+  filter["ac"][0]["gs"] = true;
+  filter["ac"][0]["tas"] = true;
+  filter["ac"][0]["ias"] = true;
+  filter["ac"][0]["alt_baro"] = true;
+  filter["ac"][0]["alt_geom"] = true;
+  filter["ac"][0]["flight"] = true;
+  filter["ac"][0]["hex"] = true;
+  filter["ac"][0]["t"] = true;
+
+  // Stream directly from socket without constructing a large String payload
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(
+      doc, http.getStream(), DeserializationOption::Filter(filter));
+
   http.end();
 
-  JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
     Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
     return false;

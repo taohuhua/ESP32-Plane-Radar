@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <cstdio>
+#include <cstring>
 #include <Preferences.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
@@ -122,6 +123,144 @@ WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T"
 WiFiManagerParameter s_param_btn_location("btn_cycle_location", "BOOT button cycles locations (instead of range)", "T", 2,
                                           s_btn_mode_checkbox_attrs, WFM_LABEL_AFTER);
 
+// --- Recent SSID history (display + remove only; not used for auto-connect) ---
+// Stored SSID-only (no password) to avoid a second copy of Wi-Fi secrets
+// sitting in NVS alongside the one WiFiManager/ESP-IDF already manage.
+constexpr char kSsidHistoryNamespace[] = "wifi_hist";
+constexpr char kSsidHistoryKey[] = "ssids";
+
+String s_ssid_history[config::kMaxSsidHistory];
+uint8_t s_ssid_history_count = 0;
+
+// Raw-HTML custom parameter. WiFiManagerParameter(const char*) stores the
+// pointer as-is (see getCustomHTML()), so rewriting this buffer's contents
+// later and re-rendering the portal page picks up the change with no
+// further calls needed.
+char s_ssid_history_html[768] = "";
+WiFiManagerParameter* s_param_ssid_history = nullptr;
+
+void loadSsidHistory() {
+  s_ssid_history_count = 0;
+  Preferences prefs;
+  if (!prefs.begin(kSsidHistoryNamespace, true)) {
+    return;
+  }
+  const String blob = prefs.getString(kSsidHistoryKey, "");
+  prefs.end();
+
+  int start = 0;
+  while (start < static_cast<int>(blob.length()) &&
+         s_ssid_history_count < config::kMaxSsidHistory) {
+    const int nl = blob.indexOf('\n', start);
+    const String item = (nl == -1) ? blob.substring(start) : blob.substring(start, nl);
+    if (item.length() > 0) {
+      s_ssid_history[s_ssid_history_count++] = item;
+    }
+    if (nl == -1) break;
+    start = nl + 1;
+  }
+}
+
+void saveSsidHistory() {
+  Preferences prefs;
+  if (!prefs.begin(kSsidHistoryNamespace, false)) {
+    return;
+  }
+  String blob;
+  for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
+    blob += s_ssid_history[i];
+    blob += '\n';
+  }
+  prefs.putString(kSsidHistoryKey, blob);
+  prefs.end();
+}
+
+/** Move ssid to the front (deduped), dropping the oldest past kMaxSsidHistory. */
+void ssidHistoryPush(const String& ssid) {
+  if (ssid.length() == 0) return;
+
+  for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
+    if (s_ssid_history[i] == ssid) {
+      for (uint8_t j = i; j + 1 < s_ssid_history_count; ++j) {
+        s_ssid_history[j] = s_ssid_history[j + 1];
+      }
+      s_ssid_history_count--;
+      break;
+    }
+  }
+
+  const uint8_t new_count = (s_ssid_history_count < config::kMaxSsidHistory)
+                                 ? static_cast<uint8_t>(s_ssid_history_count + 1)
+                                 : static_cast<uint8_t>(config::kMaxSsidHistory);
+  for (uint8_t i = new_count - 1; i > 0; --i) {
+    s_ssid_history[i] = s_ssid_history[i - 1];
+  }
+  s_ssid_history[0] = ssid;
+  s_ssid_history_count = new_count;
+
+  saveSsidHistory();
+  Serial.printf("[WIFI] Remembered SSID: %s (%u saved)\n", ssid.c_str(), s_ssid_history_count);
+}
+
+void ssidHistoryRemoveAt(int index) {
+  if (index < 0 || index >= static_cast<int>(s_ssid_history_count)) return;
+  for (int i = index; i + 1 < static_cast<int>(s_ssid_history_count); ++i) {
+    s_ssid_history[i] = s_ssid_history[i + 1];
+  }
+  s_ssid_history_count--;
+  saveSsidHistory();
+}
+
+void rebuildSsidHistoryHtml() {
+  String html = "<hr><h3>Recent Networks</h3>";
+  if (s_ssid_history_count == 0) {
+    html += "<p style=\"font-size:0.9em;\">No recent networks saved yet.</p>";
+  } else {
+    for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
+      html += "<div style=\"display:flex;justify-content:space-between;"
+              "align-items:center;margin:4px 0;\"><span>";
+      html += s_ssid_history[i];
+      html += "</span><a href=\"/delssid?i=";
+      html += String(i);
+      html += "\" style=\"margin-left:10px;\">Remove</a></div>";
+    }
+  }
+
+  strncpy(s_ssid_history_html, html.c_str(), sizeof(s_ssid_history_html) - 1);
+  s_ssid_history_html[sizeof(s_ssid_history_html) - 1] = '\0';
+}
+
+/** Fired by WiFiManager only after a *successful* connect to newly-submitted
+ *  credentials (setBreakAfterConfig() is not used in this app, so this never
+ *  fires on a failed save). WiFi.SSID() reflects the network just joined. */
+void onWifiConnectSaved() {
+  const String ssid = WiFi.SSID();
+  if (ssid.length() > 0) {
+    ssidHistoryPush(ssid);
+    rebuildSsidHistoryHtml();
+  }
+}
+
+void handleDeleteSsidRoute() {
+  if (s_wm.server && s_wm.server->hasArg("i")) {
+    ssidHistoryRemoveAt(s_wm.server->arg("i").toInt());
+  }
+  rebuildSsidHistoryHtml();
+  if (s_wm.server) {
+    s_wm.server->sendHeader("Location", "/wifi");
+    s_wm.server->send(303);
+  }
+}
+
+/** Re-registered every time WiFiManager (re)builds its web server — see
+ *  setWebServerCallback() doc: "callback after webserver is reset, and
+ *  before routes are setup" — so /delssid survives portal restarts. */
+void attachCustomServerRoutes() {
+  if (s_wm.server) {
+    s_wm.server->on("/delssid", HTTP_GET, handleDeleteSsidRoute);
+  }
+}
+
 void initLocationParameters() {
   static bool parametersInitialized = false;
   if (parametersInitialized) return;
@@ -139,6 +278,11 @@ void initLocationParameters() {
     s_param_loc_lats[i]  = new WiFiManagerParameter(s_param_ids[i][1], "Latitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
     s_param_loc_lons[i]  = new WiFiManagerParameter(s_param_ids[i][2], "Longitude", "0.000000", kCoordParamLen, kCoordInputAttrs);
   }
+
+  loadSsidHistory();
+  rebuildSsidHistoryHtml();
+  s_param_ssid_history = new WiFiManagerParameter(s_ssid_history_html);
+
   parametersInitialized = true;
 }
 
@@ -254,6 +398,10 @@ void onPortalParamsSaved() {
 void attachPortalParams(WiFiManager& wm) {
   refreshPortalParamDefaults();
 
+  if (s_param_ssid_history) {
+    wm.addParameter(s_param_ssid_history);
+  }
+
 // Pass pointers directly to WiFiManager
 for (int i = 0; i < config::kMaxLocations; ++i) {
   wm.addParameter(s_loc_headers[i]);
@@ -351,6 +499,8 @@ void ensureWifiManager() {
                            IPAddress(255, 255, 255, 0));
   s_wm.setHostname(config::kPortalHostname);
   s_wm.setAPCallback(onConfigPortalApStarted);
+  s_wm.setSaveConfigCallback(onWifiConnectSaved);
+  s_wm.setWebServerCallback(attachCustomServerRoutes);
   
   // Refresh defaults before attach
   refreshPortalParamDefaults();

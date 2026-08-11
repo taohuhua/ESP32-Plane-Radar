@@ -241,3 +241,68 @@ void statusScreenWifiReset() {
   drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
                 sizeof(lines) / sizeof(lines[0]));
 }
+
+namespace {
+
+constexpr int kSweepCx = config::kDisplayWidth / 2;
+constexpr int kSweepCy = config::kDisplayHeight / 2;
+constexpr int kSweepR = 120;
+constexpr int kSweepTotalSteps = 24;
+constexpr int kSweepStepDelayMs = 60;
+constexpr float kSweepStepAngleRad = (360.0f / kSweepTotalSteps) * (3.14159f / 180.0f);
+constexpr uint16_t kSweepColorBeam = TFT_GREEN;
+constexpr uint16_t kSweepColorTrailMid = TFT_DARKGREEN;
+constexpr uint16_t kSweepColorTrailDim = 0x0280;
+
+void drawSweepGrid() {
+  tft.drawCircle(kSweepCx, kSweepCy, kSweepR - 1, TFT_DARKGREEN);
+  tft.drawCircle(kSweepCx, kSweepCy, (kSweepR * 2) / 3, TFT_DARKGREEN);
+  tft.drawCircle(kSweepCx, kSweepCy, kSweepR / 3, TFT_DARKGREEN);
+  tft.drawFastHLine(0, kSweepCy, config::kDisplayWidth, TFT_DARKGREEN);
+  tft.drawFastVLine(kSweepCx, 0, config::kDisplayHeight, TFT_DARKGREEN);
+}
+
+void drawSweepLabel(const char* label) {
+  applyConnectingDetailStyle();
+  tft.setTextDatum(textdatum_t::top_center);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  const int band_h = tft.fontHeight() + 4;
+  constexpr int kBandY = 40;
+  tft.fillRect(0, kBandY - 2, config::kDisplayWidth, band_h, TFT_BLACK);
+  tft.drawString(label, kSweepCx, kBandY);
+}
+
+}  // namespace
+
+void statusScreenRadarSweep(const char* label) {
+  const char* text = (label != nullptr && label[0] != '\0') ? label : "SWITCHING...";
+
+  tft.fillScreen(TFT_BLACK);
+  drawSweepGrid();
+  drawSweepLabel(text);
+
+  for (int step = 0; step < kSweepTotalSteps; ++step) {
+    const float angle_rad = step * kSweepStepAngleRad;
+    const int16_t x_line = kSweepCx + static_cast<int16_t>(kSweepR * cosf(angle_rad));
+    const int16_t y_line = kSweepCy + static_cast<int16_t>(kSweepR * sinf(angle_rad));
+
+    const float prev_rad_1 = (step - 1) * kSweepStepAngleRad;
+    const int16_t x_prev1 = kSweepCx + static_cast<int16_t>(kSweepR * cosf(prev_rad_1));
+    const int16_t y_prev1 = kSweepCy + static_cast<int16_t>(kSweepR * sinf(prev_rad_1));
+
+    const float prev_rad_2 = (step - 2) * kSweepStepAngleRad;
+    const int16_t x_prev2 = kSweepCx + static_cast<int16_t>(kSweepR * cosf(prev_rad_2));
+    const int16_t y_prev2 = kSweepCy + static_cast<int16_t>(kSweepR * sinf(prev_rad_2));
+
+    tft.drawLine(kSweepCx, kSweepCy, x_line, y_line, kSweepColorBeam);
+    tft.drawLine(kSweepCx, kSweepCy, x_prev1, y_prev1, kSweepColorTrailMid);
+    tft.drawLine(kSweepCx, kSweepCy, x_prev2, y_prev2, kSweepColorTrailDim);
+
+    delay(kSweepStepDelayMs);
+
+    // Erase the fully-faded trailing edge, then patch the grid lines it cut.
+    tft.drawLine(kSweepCx, kSweepCy, x_prev2, y_prev2, TFT_BLACK);
+    drawSweepGrid();
+    drawSweepLabel(text);
+  }
+}
