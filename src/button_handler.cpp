@@ -17,19 +17,23 @@
 // buttons (GPIO 2 / GPIO 5) so BOOT taps aren't handled twice.
 
 void triggerLocationCycle() {
-  LocationProfile* prof = g_profileManager.nextProfile();
-
-  if (!prof) {
+  if (services::location::count() == 0) {
     Serial.println("[Location] No profiles available to cycle.");
     return;
   }
 
-  // Directly update internal location service parameters
-  services::location::set(prof->lat, prof->lon, prof->name);
+  // services::location::next() advances ProfileManager's active index AND
+  // re-syncs radar_location's own cached index in one step. Calling
+  // g_profileManager.nextProfile() directly here (as this used to) leaves
+  // that cache stale, and a later services::location::set() call would
+  // then write the new location's data into the OLD (stale) slot instead
+  // of just switching to it — silently corrupting whichever slot the
+  // cache was stuck on.
+  services::location::next();
 
-  Serial.printf("[Location] Switched to %s (Index: %d, Lat: %.4f, Lon: %.4f)\n",
+  Serial.printf("[Location] Switched to %s (Index: %u, Lat: %.4f, Lon: %.4f)\n",
                 services::location::name(),
-                g_profileManager.getActiveIndex(),
+                static_cast<unsigned>(services::location::currentIndex()),
                 services::location::lat(),
                 services::location::lon());
 

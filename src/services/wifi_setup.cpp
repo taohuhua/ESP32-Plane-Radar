@@ -669,7 +669,15 @@ bool openConfigPortal() {
   
   WiFi.mode(WIFI_AP_STA); // Enable AP + STA for captive portal
   statusScreenPortal();
-  
+
+  // Without this, the checkbox/location fields shown here are whatever
+  // ensureWifiManager() captured at its single one-time call this boot —
+  // stale the moment anything changes them afterwards (e.g. re-opening
+  // this AP portal a second time in the same session after a save shows
+  // the pre-save values, which then get written straight back out on the
+  // next submit). startLanWebPortal() already does this; this path didn't.
+  refreshPortalParamDefaults();
+
   s_wm.setConfigPortalBlocking(false);
   s_wm.startConfigPortal(config::kPortalApName);
   

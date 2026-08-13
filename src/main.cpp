@@ -27,9 +27,17 @@ unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 
 void syncLocationFromActiveProfile() {
+  // wifiSetupConnect() may have opened the config portal and changed the
+  // active profile in between services::location::init() (step 2) and
+  // here — re-sync the cached index so it matches ProfileManager. This
+  // must NOT call services::location::set(), which WRITES the given
+  // coordinates into whatever slot the cache currently points at: with a
+  // stale cache that overwrites the wrong slot (see triggerLocationCycle()
+  // in button_handler.cpp for the same bug, previously present here too).
+  services::location::init();
+
   LocationProfile* prof = g_profileManager.getActiveProfile();
   if (prof) {
-    services::location::set(prof->lat, prof->lon, prof->name);
     Serial.printf("[Setup] Active Profile: %s (Lat: %.4f, Lon: %.4f)\n", 
                   prof->name, prof->lat, prof->lon);
   } else {
