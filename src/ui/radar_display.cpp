@@ -674,9 +674,20 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  s_frame.setColorDepth(16);
+  // 8bpp (RGB332, no createPalette() call) halves this from 115,200 to
+  // 57,600 bytes — the 240x240x16bpp sprite was landing right at the edge
+  // of what this board's heap layout leaves as one contiguous block (see
+  // "frame sprite alloc failed" in the log), even after other fixes.
+  // LovyanGFX auto-converts the existing RGB565 color values used
+  // throughout this file into the sprite's native format on every draw
+  // call, so no other code here needs to change — but 3-3-2 bit color is
+  // coarser than 5-6-5, so it's worth actually looking at the display
+  // after flashing. If any color looks visibly off, reverting this one
+  // line to setColorDepth(16) undoes it (at the cost of returning to the
+  // tight-margin allocation failures).
+  s_frame.setColorDepth(8);
   if (!s_frame.createSprite(radar::kSize, radar::kSize)) {
-    Serial.println("radar: frame sprite alloc failed");
+    LOG_ERROR_LN("radar: frame sprite alloc failed");
     return false;
   }
   s_frame_ready = true;
@@ -723,6 +734,13 @@ void radarDisplayRefreshAircraft() {
   }
 
   radarDisplayDraw();
+}
+
+void radarDisplayReleaseFrameBuffer() {
+  if (s_frame_ready) {
+    s_frame.deleteSprite();
+    s_frame_ready = false;
+  }
 }
 
 }  // namespace ui

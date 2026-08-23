@@ -369,17 +369,18 @@ void onPortalParamsSaved() {
   }
 
   // Restore active index or fallback to index 0
-  if (previousActiveIndex >= 0 && previousActiveIndex < g_profileManager.getProfileCount()) {
-    g_profileManager.setActiveIndex(previousActiveIndex);
-  } else {
-    g_profileManager.setActiveIndex(0);
-  }
-
-  // Sync active location coordinates to the radar service
-  LocationProfile* currentProf = g_profileManager.getActiveProfile();
-  if (currentProf) {
-    services::location::set(currentProf->lat, currentProf->lon, currentProf->name);
-  }
+  const int restoredIndex = (previousActiveIndex >= 0 &&
+                              previousActiveIndex < g_profileManager.getProfileCount())
+                                 ? previousActiveIndex
+                                 : 0;
+  // services::location::setIndex() sets ProfileManager's active index AND
+  // re-syncs radar_location's own cached copy together — using
+  // g_profileManager.setActiveIndex() directly here (as this used to) left
+  // that cache stale, so the services::location::set() call that used to
+  // follow it could overwrite the wrong slot. The profile data itself was
+  // already written above via setProfileAt(), so no set() call is needed
+  // here at all — just point the active index at it.
+  services::location::setIndex(restoredIndex);
 
   // Save custom radar portal parameters
   ui::radar::saveMilesFromPortal(s_wm.server->hasArg("use_miles") ? "T" : "");
@@ -393,6 +394,15 @@ void onPortalParamsSaved() {
   
   Serial.printf("[WiFiManager] Saved Button Mode: %u (%s)\n", 
                 getBootButtonMode(), cycleLocations ? "Cycle Locations" : "Cycle Range");
+
+  // Without this, every display buffer (checkbox "checked" attrs, location
+  // name/lat/lon fields) stays frozen at whatever it was when the portal
+  // page was first built. The save above updates the real backing
+  // state (NVS + ProfileManager) correctly, but if the same portal session
+  // stays open and the user revisits a page without a fresh portal restart,
+  // it re-renders from these buffers — which is exactly what made the
+  // checkbox look like it "forgot" a save that had actually gone through.
+  refreshPortalParamDefaults();
 }
 
 void attachPortalParams(WiFiManager& wm) {
@@ -812,7 +822,7 @@ bool wifiSetupConnect() {
     return true;
   }
 
-  Serial.println("[WIFI] Connection failed");
+  LOG_ERROR_LN("[WIFI] Connection failed");
   statusScreenConnectFailed();
   return false;
 }

@@ -13,12 +13,27 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 
 After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
 
-## Controls (BOOT, GPIO 9, active LOW)
+## Controls
+
+**BOOT (GPIO 9, active LOW)** — always active, no wiring needed:
 
 | Action | Effect |
 |--------|--------|
-| **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
+| **Short tap** | Cycle range preset, *or* cycle location preset — see below |
 | **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
+
+BOOT cycles the **range** preset by default. Check **"BOOT button cycles locations (instead of range)"** in the Wi‑Fi setup portal to switch it to cycling **locations** instead — handy for testing location cycling before the dedicated buttons below are wired up.
+
+**Dedicated external buttons (optional)** — momentary, wired to GND, `INPUT_PULLUP`:
+
+| Pin | Effect |
+|-----|--------|
+| **GPIO 2** | Cycle location preset (independent of the BOOT toggle above) |
+| **GPIO 5** | Cycle range preset |
+
+Location cycling skips any preset whose latitude/longitude are both `0` (i.e. unset). Both range and location changes play a radar-sweep animation and persist across power-off.
+
+> Implemented in firmware but not yet validated against real hardware — GPIO2/GPIO5 buttons are on order. Will confirm here once tested.
 
 During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
 
@@ -41,9 +56,11 @@ The same portal runs on the setup AP and on the device’s LAN IP while connecte
 
 | Field | Purpose |
 |-------|---------|
-| **Latitude / Longitude** | Radar center and ADS-B query position (defaults in `config.h` until set) |
+| **Location 1–5** (name / latitude / longitude) | Up to 5 named locations to cycle through; leave lat/lon at `0` to skip a slot |
+| **BOOT button cycles locations (instead of range)** | Toggles what a BOOT tap cycles — see [Controls](#controls) |
 | **Display distances in miles** | Ring scale label in **mi** instead of **km** (e.g. `6mi` vs `10km`) |
 | **Show airport runways** | Major-airport runway overlay on the radar (off to hide) |
+| **Recent Networks** | Last 3 Wi‑Fi networks successfully connected to (SSID only), each with a Remove link — for tidying up, not auto-connect |
 
 After a reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
 
@@ -98,6 +115,7 @@ Edit **`include/config.h`** for hardware and behavior:
 | Portal | `kPortalApName`, `kPortalIp`, `kPortalHostname` / `kPortalHostUrl` (mDNS; needs `-DWM_MDNS` in `platformio.ini`) |
 | Wi‑Fi timing | connect attempts, reconnect grace, portal timeout (`0` = no timeout) |
 | BOOT | `kBootPin`, `kBootResetHoldMs`, `kBootTapMinMs` |
+| Buttons | `kLocationBtnPin` (GPIO2), `kRadiusBtnPin` (GPIO5) |
 | Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
 | Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
 | ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
@@ -150,6 +168,8 @@ src/
 | SDA (MOSI) | GPIO **3** |
 | SCL (SCLK) | GPIO **4** |
 | BOOT (user) | GPIO **9** |
+| Location button *(optional)* | GPIO **2** |
+| Range button *(optional)* | GPIO **5** |
 
 ## Build
 

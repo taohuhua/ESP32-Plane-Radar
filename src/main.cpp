@@ -56,6 +56,10 @@ void showRadarIfConnected() {
 
 void fetchAndDrawAircraft() {
   const float fetch_km = ui::radar::fetchRadiusKm();
+  // Free the ~112KB frame sprite before the fetch so its buffer isn't
+  // competing with the TLS handshake's own large contiguous allocation —
+  // radarDisplayRefreshAircraft() recreates it lazily right after.
+  ui::radarDisplayReleaseFrameBuffer();
   if (!services::adsb::fetchUpdate(services::location::lat(),
                                    services::location::lon(), fetch_km)) {
     buttonHandlerPoll();
@@ -93,7 +97,7 @@ void testNvsPersistence() {
   
   // 1. Open the "wifi" or "profile" namespace in read/write mode (false)
   if (!prefs.begin("wifi", false)) {
-    Serial.println("[NVS TEST] FAILED: Could not open Preferences namespace!");
+    LOG_ERROR_LN("[NVS TEST] FAILED: Could not open Preferences namespace!");
     return;
   }
 
@@ -141,7 +145,7 @@ void setup() {
     // 5. Render primary radar UI
     showRadarIfConnected();
   } else {
-    Serial.println("[BOOT] WiFi setup failed or timed out.");
+    LOG_ERROR_LN("[BOOT] WiFi setup failed or timed out.");
     // Handles failure state display (e.g., statusScreenConnectFailed)
   }
 }
