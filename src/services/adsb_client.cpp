@@ -18,15 +18,6 @@ constexpr float kKmPerNm = 1.852f;
 constexpr int kConnectAttemptMs = 200;
 constexpr unsigned long kRequestTimeoutMs = 10000;
 
-// A handshake that fails for lack of heap won't succeed by retrying 5ms
-// later — it needs the retry gap to actually be worth something. Capping
-// this at a handful of slower attempts (instead of up to ~2000 attempts
-// crammed into a 10s window) turns a potential heap-hammering loop into a
-// quick, bounded failure that leaves the outer 5s fetch cadence as the
-// real retry mechanism.
-constexpr int kMaxConnectRetries = 3;
-constexpr int kConnectRetryDelayMs = 200;
-
 // A TLS 1.2 handshake on ESP32's mbedTLS build typically wants somewhere
 // in the 40-50KB range of *contiguous* heap. On an ESP32-C3 Super Mini
 // (no PSRAM) that's a meaningful fraction of total RAM once WiFi, the
@@ -50,21 +41,8 @@ void pollNetwork() {
 
 int performGetWithPoll(HTTPClient& http) {
   http.setConnectTimeout(kConnectAttemptMs);
-  for (int attempt = 0; attempt <= kMaxConnectRetries; ++attempt) {
-    pollNetwork();
-    const int code = http.GET();
-    if (code > 0) {
-      return code;
-    }
-    if (code != HTTPC_ERROR_CONNECTION_REFUSED &&
-        code != HTTPC_ERROR_NOT_CONNECTED) {
-      return code;
-    }
-    if (attempt < kMaxConnectRetries) {
-      delay(kConnectRetryDelayMs);
-    }
-  }
-  return HTTPC_ERROR_READ_TIMEOUT;
+  pollNetwork();
+  return http.GET();
 }
 
 float kmToNauticalMiles(float km) { return km / kKmPerNm; }
@@ -221,6 +199,16 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   }
 
   HTTPClient http;
+  // deserializeJson() below reads directly from http.getStream() to avoid
+  // buffering the whole response into a String first — but per ArduinoJson's
+  // own docs, doing that bypasses HTTPClient's chunked-transfer-encoding
+  // handling entirely, so any chunk-size framing bytes leak straight into
+  // the JSON parser (this is exactly what "JSON parse error: InvalidInput"
+  // with a body preview starting in a stray hex digit + \r\n turned out to
+  // be). Requesting HTTP/1.0 makes compliant servers respond with
+  // Content-Length or a close-terminated body instead of chunked encoding,
+  // sidestepping the bypassed code path rather than working around it.
+  http.useHTTP10(true);
   if (!http.begin(client, url)) {
     LOG_ERROR("adsb: http.begin failed (heap free=%u max_alloc=%u)",
               ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -245,12 +233,44 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   const DeserializationError err = deserializeJson(
       doc, http.getStream(), DeserializationOption::Filter(filter));
 
-  http.end();
-
   if (err) {
-    LOG_ERROR("adsb: JSON parse error: %s", err.c_str());
+    // InvalidInput almost always means the very first byte wasn't valid
+    // JSON — which means the parser consumed at most a byte or two before
+    // giving up, so the rest of whatever the server actually sent is very
+    // likely still sitting unread in the stream right here. Log a preview
+    // of it (printable characters kept as-is, everything else as [xx] hex)
+    // so we can see whether this is a genuine payload issue (truncated/
+    // malformed JSON), an HTML error/rate-limit page from a proxy in front
+    // of adsb.fi, or something else entirely — the error code alone can't
+    // tell us that.
+    char preview[161];
+    size_t n = 0;
+    Stream& body = http.getStream();
+    while (n < sizeof(preview) - 1 && body.available()) {
+      const int c = body.read();
+      if (c < 0) break;
+      preview[n++] = static_cast<char>(c);
+    }
+    preview[n] = '\0';
+    String preview_escaped;
+    preview_escaped.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+      const unsigned char c = static_cast<unsigned char>(preview[i]);
+      if (c >= 0x20 && c < 0x7f) {
+        preview_escaped += static_cast<char>(c);
+      } else {
+        char hex[6];
+        snprintf(hex, sizeof(hex), "[%02x]", c);
+        preview_escaped += hex;
+      }
+    }
+    LOG_ERROR("adsb: JSON parse error: %s | body preview (%u bytes): %s",
+              err.c_str(), static_cast<unsigned>(n), preview_escaped.c_str());
+    http.end();
     return false;
   }
+
+  http.end();
 
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {
