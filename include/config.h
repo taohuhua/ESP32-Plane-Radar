@@ -4,6 +4,17 @@
 #include <cstddef>
 #include <driver/gpio.h>
 
+// --- Serial log coloring ---
+// PlatformIO's serial monitor renders ANSI color codes when the `colorize`
+// filter is active (see platformio.ini's monitor_filters). These wrap a
+// Serial.printf/println format string — not its arguments — in red, so
+// error-level lines stand out from the routine "adsb: N aircraft" status
+// noise. LOG_ERROR takes the same printf-style args as Serial.printf();
+// use LOG_ERROR_LN for a plain string (maps to Serial.println() semantics,
+// no trailing \n needed).
+#define LOG_ERROR(fmt, ...) Serial.printf("\033[31m" fmt "\033[0m\n", ##__VA_ARGS__)
+#define LOG_ERROR_LN(msg) Serial.println("\033[31m" msg "\033[0m")
+
 namespace config {
 
 // --- Wi-Fi portal ---

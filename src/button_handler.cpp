@@ -40,6 +40,11 @@ void triggerLocationCycle() {
   if (WiFi.status() == WL_CONNECTED) {
     statusScreenRadarSweep(services::location::name());
     ui::radarDisplayDraw();
+    // radarDisplayDraw() just (re)allocated the ~112KB frame sprite —
+    // release it again before the fetch so it isn't competing with the
+    // TLS handshake's own large contiguous allocation. radarDisplayRefreshAircraft()
+    // recreates it lazily right after.
+    ui::radarDisplayReleaseFrameBuffer();
     const float fetch_km = ui::radar::fetchRadiusKm();
     services::adsb::fetchUpdate(services::location::lat(),
                                 services::location::lon(),

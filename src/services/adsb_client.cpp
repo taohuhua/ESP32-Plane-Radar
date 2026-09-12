@@ -18,6 +18,17 @@ constexpr float kKmPerNm = 1.852f;
 constexpr int kConnectAttemptMs = 200;
 constexpr unsigned long kRequestTimeoutMs = 10000;
 
+// A TLS 1.2 handshake on ESP32's mbedTLS build typically wants somewhere
+// in the 40-50KB range of *contiguous* heap. On an ESP32-C3 Super Mini
+// (no PSRAM) that's a meaningful fraction of total RAM once WiFi, the
+// display driver, and WiFiManager are resident. Skip the attempt (and
+// the multi-line mbedTLS error burst that comes with it) when there's
+// clearly not enough room, rather than hammering a doomed connect() —
+// this only avoids wasted churn/log noise, it doesn't fix a genuine
+// shortage; watch the free/max_alloc numbers already logged below to see
+// whether that's what's actually going on.
+constexpr size_t kMinContiguousHeapForTls = 45000;
+
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
 PollFn s_poll_fn = nullptr;
@@ -30,23 +41,45 @@ void pollNetwork() {
 
 int performGetWithPoll(HTTPClient& http) {
   http.setConnectTimeout(kConnectAttemptMs);
-  const unsigned long deadline = millis() + kRequestTimeoutMs;
-  while (millis() < deadline) {
-    pollNetwork();
-    const int code = http.GET();
-    if (code > 0) {
-      return code;
-    }
-    if (code != HTTPC_ERROR_CONNECTION_REFUSED &&
-        code != HTTPC_ERROR_NOT_CONNECTED) {
-      return code;
-    }
-    delay(5);
-  }
-  return HTTPC_ERROR_READ_TIMEOUT;
+  pollNetwork();
+  return http.GET();
 }
 
 float kmToNauticalMiles(float km) { return km / kKmPerNm; }
+
+/** Filter content is identical on every call, so build it once and reuse —
+ *  no reason to alloc/free the same 14 boolean flags every 5 seconds. */
+JsonDocument& sharedFilterDoc() {
+  static JsonDocument filter;
+  static bool initialized = false;
+  if (!initialized) {
+    filter["ac"][0]["lat"] = true;
+    filter["ac"][0]["lon"] = true;
+    filter["ac"][0]["true_heading"] = true;
+    filter["ac"][0]["mag_heading"] = true;
+    filter["ac"][0]["track"] = true;
+    filter["ac"][0]["dir"] = true;
+    filter["ac"][0]["gs"] = true;
+    filter["ac"][0]["tas"] = true;
+    filter["ac"][0]["ias"] = true;
+    filter["ac"][0]["alt_baro"] = true;
+    filter["ac"][0]["alt_geom"] = true;
+    filter["ac"][0]["flight"] = true;
+    filter["ac"][0]["hex"] = true;
+    filter["ac"][0]["t"] = true;
+    initialized = true;
+  }
+  return filter;
+}
+
+/** Reused across calls (cleared, not reconstructed) so its backing pool
+ *  settles at the largest response seen instead of a fresh malloc/free of a
+ *  differently-sized buffer every fetch — the main heap-fragmentation risk
+ *  on a device that's meant to run for days between reboots. */
+JsonDocument& sharedResponseDoc() {
+  static JsonDocument doc;
+  return doc;
+}
 
 bool readJsonFloat(const JsonObject& obj, const char* key, float* out) {
   if (obj[key].is<float>() || obj[key].is<double>() || obj[key].is<int>()) {
@@ -155,52 +188,97 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   WiFiClientSecure client;
   client.setInsecure();
 
+  const size_t max_alloc = ESP.getMaxAllocHeap();
+  if (max_alloc < kMinContiguousHeapForTls) {
+    LOG_ERROR(
+        "adsb: skipping fetch, largest free block too small for TLS "
+        "(max_alloc=%u free=%u, want>=%u)",
+        static_cast<unsigned>(max_alloc), ESP.getFreeHeap(),
+        static_cast<unsigned>(kMinContiguousHeapForTls));
+    return false;
+  }
+
   HTTPClient http;
+  // deserializeJson() below reads directly from http.getStream() to avoid
+  // buffering the whole response into a String first — but per ArduinoJson's
+  // own docs, doing that bypasses HTTPClient's chunked-transfer-encoding
+  // handling entirely, so any chunk-size framing bytes leak straight into
+  // the JSON parser (this is exactly what "JSON parse error: InvalidInput"
+  // with a body preview starting in a stray hex digit + \r\n turned out to
+  // be). Requesting HTTP/1.0 makes compliant servers respond with
+  // Content-Length or a close-terminated body instead of chunked encoding,
+  // sidestepping the bypassed code path rather than working around it.
+  http.useHTTP10(true);
   if (!http.begin(client, url)) {
-    Serial.println("adsb: http.begin failed");
+    LOG_ERROR("adsb: http.begin failed (heap free=%u max_alloc=%u)",
+              ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return false;
   }
 
   http.setTimeout(kRequestTimeoutMs);
   const int code = performGetWithPoll(http);
   if (code != HTTP_CODE_OK) {
-    Serial.printf("adsb: HTTP %d\n", code);
+    LOG_ERROR("adsb: HTTP %d (heap free=%u max_alloc=%u)", code,
+              ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     http.end();
     return false;
   }
 
   // Define JSON Filter to save >70% heap RAM during parsing
-  JsonDocument filter;
-  filter["ac"][0]["lat"] = true;
-  filter["ac"][0]["lon"] = true;
-  filter["ac"][0]["true_heading"] = true;
-  filter["ac"][0]["mag_heading"] = true;
-  filter["ac"][0]["track"] = true;
-  filter["ac"][0]["dir"] = true;
-  filter["ac"][0]["gs"] = true;
-  filter["ac"][0]["tas"] = true;
-  filter["ac"][0]["ias"] = true;
-  filter["ac"][0]["alt_baro"] = true;
-  filter["ac"][0]["alt_geom"] = true;
-  filter["ac"][0]["flight"] = true;
-  filter["ac"][0]["hex"] = true;
-  filter["ac"][0]["t"] = true;
+  JsonDocument& filter = sharedFilterDoc();
 
   // Stream directly from socket without constructing a large String payload
-  JsonDocument doc;
+  JsonDocument& doc = sharedResponseDoc();
+  doc.clear();
   const DeserializationError err = deserializeJson(
       doc, http.getStream(), DeserializationOption::Filter(filter));
 
-  http.end();
-
   if (err) {
-    Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
+    // InvalidInput almost always means the very first byte wasn't valid
+    // JSON — which means the parser consumed at most a byte or two before
+    // giving up, so the rest of whatever the server actually sent is very
+    // likely still sitting unread in the stream right here. Log a preview
+    // of it (printable characters kept as-is, everything else as [xx] hex)
+    // so we can see whether this is a genuine payload issue (truncated/
+    // malformed JSON), an HTML error/rate-limit page from a proxy in front
+    // of adsb.fi, or something else entirely — the error code alone can't
+    // tell us that.
+    char preview[161];
+    size_t n = 0;
+    Stream& body = http.getStream();
+    while (n < sizeof(preview) - 1 && body.available()) {
+      const int c = body.read();
+      if (c < 0) break;
+      preview[n++] = static_cast<char>(c);
+    }
+    preview[n] = '\0';
+    String preview_escaped;
+    preview_escaped.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+      const unsigned char c = static_cast<unsigned char>(preview[i]);
+      if (c >= 0x20 && c < 0x7f) {
+        preview_escaped += static_cast<char>(c);
+      } else {
+        char hex[6];
+        snprintf(hex, sizeof(hex), "[%02x]", c);
+        preview_escaped += hex;
+      }
+    }
+    LOG_ERROR("adsb: JSON parse error: %s | body preview (%u bytes): %s",
+              err.c_str(), static_cast<unsigned>(n), preview_escaped.c_str());
+    http.end();
     return false;
   }
+
+  http.end();
 
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {
     s_aircraft_count = 0;
+    // See the shrinkToFit() call below — release doc's capacity even when
+    // there's nothing to parse, so it isn't sitting on memory it doesn't
+    // need between fetches either.
+    doc.shrinkToFit();
     return true;
   }
 
@@ -226,7 +304,21 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   }
 
   s_aircraft_count = n;
-  Serial.printf("adsb: %u aircraft\n", static_cast<unsigned>(n));
+
+  // doc is static/reused (see sharedResponseDoc()) so it doesn't churn
+  // malloc/free every 5s — but left at its grown capacity, it permanently
+  // competes with other big allocations (like radar_display.cpp's 240x240
+  // frame sprite) for the same contiguous heap, even between fetches when
+  // it's not actually holding anything useful. shrinkToFit() releases the
+  // spare capacity now that the data's been copied out into s_aircraft[];
+  // next call, deserializeJson() just regrows it, which costs a bit of
+  // realloc time but not a bigger footprint than before, and gives whatever
+  // draws next (the frame sprite, right after this returns) first crack at
+  // that memory instead of it sitting reserved and idle.
+  doc.shrinkToFit();
+
+  Serial.printf("adsb: %u aircraft, heap free=%u max_alloc=%u\n",
+                static_cast<unsigned>(n), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   return true;
 }
 
