@@ -206,12 +206,24 @@ pio run -t merge -e supermini
 
 Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with Chrome/Edge over USB.
 
+### Updating an already-set-up device
+
+Flashing the full merged image above wipes NVS — WiFi credentials, saved locations, SSID history, and the boot-button mode preference all get erased, since that image spans from `0x0` through the app and fills the gap in between (which is exactly where NVS lives) with erased-flash bytes. Fine for a first flash; not what you want when pushing a code update to a device someone's already configured.
+
+For updates, flash only the **app** binary, at its own offset — this never touches NVS:
+
+```bash
+esptool.py write_flash 0x10000 .pio/build/supermini/firmware.bin
+```
+
+The `Release` workflow (below) publishes this as a separate, clearly-offset-labeled file for exactly this purpose — safe to hand to someone else to flash themselves via [web.esphome.io](https://web.esphome.io) without walking them through a rebuild, as long as they use the offset in the filename. If a particular browser flasher's UI doesn't expose a custom offset field for unrecognized firmware, it's almost always assuming `0x0` — in that case, the command above (or any `esptool.py`-based tool that accepts an offset) is the fallback.
+
 ### CI and releases (GitHub Actions)
 
 | Workflow | When | Output |
 |----------|------|--------|
 | [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-supermini` (merged + split `.bin` files, ~90 days) |
-| [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release asset `plane-radar-v1.0.0.bin` + `.sha256` |
+| [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release assets: `plane-radar-v1.0.0-full-flash-at-0x0.bin` (new device / full reset) and `plane-radar-v1.0.0-update-flash-at-0x10000.bin` (update, keeps settings) + `.sha256` for each |
 
 To ship a version users can download:
 
@@ -220,7 +232,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32-C3, 4 MB).
+The release workflow builds firmware in CI and attaches both images to the release, with flashing instructions (including the offset each needs) in the release notes. Download from **Releases** on GitHub — pick the full image for first-time setup, the update image for an already-configured device.
 
 ## Dependencies
 

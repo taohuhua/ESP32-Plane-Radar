@@ -48,8 +48,28 @@ jobs:
             VERSION="manual-${GITHUB_SHA::7}"
           fi
           mkdir -p dist
-          cp .pio/build/supermini/firmware-merged.bin "dist/plane-radar-${VERSION}.bin"
-          sha256sum "dist/plane-radar-${VERSION}.bin" > "dist/plane-radar-${VERSION}.bin.sha256"
+
+          # Full image: bootloader + partition table + otadata + app, meant
+          # for a blank chip or a from-scratch reflash. Flashing this wipes
+          # the NVS partition (WiFi credentials, saved locations, SSID
+          # history, boot-button mode) since merge_bin fills the gap between
+          # segments — including the NVS region sitting between the
+          # bootloader and the app — with 0xFF. Flash at offset 0x0.
+          cp .pio/build/supermini/firmware-merged.bin \
+            "dist/plane-radar-${VERSION}-full-flash-at-0x0.bin"
+
+          # App-only image: just the application partition, same bytes
+          # merge_bin placed at 0x10000 in the full image above but as a
+          # standalone file. Flashing ONLY this, AT 0x10000, leaves NVS
+          # (0x9000-0xE000, well below this file's target offset) completely
+          # untouched — this is the one for updating a device that's already
+          # set up, without re-doing WiFi/location setup afterward.
+          cp .pio/build/supermini/firmware.bin \
+            "dist/plane-radar-${VERSION}-update-flash-at-0x10000.bin"
+
+          for f in dist/*.bin; do
+            sha256sum "$f" > "$f.sha256"
+          done
           echo "version=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
@@ -57,5 +77,16 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          body: |
+            ## Flashing this release
+
+            Two `.bin` files are attached — **use the right one for what you're doing**, the offset in each filename is the flash address it must be written at:
+
+            - **`*-full-flash-at-0x0.bin`** — use for a brand-new device, or if you want to wipe everything and start over. Flash at offset **`0x0`**. This **erases saved WiFi credentials, locations, and other settings**.
+            - **`*-update-flash-at-0x10000.bin`** — use to update an already-set-up device. Flash at offset **`0x10000`**. This **preserves** WiFi, saved locations, and settings.
+
+            Using [web.esphome.io](https://web.esphome.io) (Chrome/Edge, USB cable, no software install): connect the device, choose "Install", pick the correct `.bin` for what you're doing above. If its interface doesn't offer an offset field for a custom firmware, it's likely assuming offset `0x0` — in that case only use the full-flash file that way, and use `esptool.py write_flash 0x10000 <update-file>.bin` from a computer with Python for updates instead.
+
+            ---
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
