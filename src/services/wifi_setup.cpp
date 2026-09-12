@@ -3,6 +3,7 @@
 
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <ArduinoJson.h>
 #include <cstdio>
 #include <cstring>
 #include <Preferences.h>
@@ -123,13 +124,22 @@ WiFiManagerParameter s_param_runways("show_runways", "Show airport runways", "T"
 WiFiManagerParameter s_param_btn_location("btn_cycle_location", "BOOT button cycles locations (instead of range)", "T", 2,
                                           s_btn_mode_checkbox_attrs, WFM_LABEL_AFTER);
 
-// --- Recent SSID history (display + remove only; not used for auto-connect) ---
-// Stored SSID-only (no password) to avoid a second copy of Wi-Fi secrets
-// sitting in NVS alongside the one WiFiManager/ESP-IDF already manage.
+// --- Recent SSID history — now used for real fallback, not just display ---
+// Stores SSID + password pairs (most-recent-first), so scanAndConnectSaved-
+// Networks() can try each remembered network in turn if the primary one
+// isn't reachable. This is a deliberate change from the original SSID-only
+// design (see conversation history): storing multiple plaintext WiFi
+// passwords in NVS is a real tradeoff, made explicitly at the user's
+// request in exchange for actual fallback behavior.
 constexpr char kSsidHistoryNamespace[] = "wifi_hist";
 constexpr char kSsidHistoryKey[] = "ssids";
 
-String s_ssid_history[config::kMaxSsidHistory];
+struct SsidHistoryEntry {
+  String ssid;
+  String pass;
+};
+
+SsidHistoryEntry s_ssid_history[config::kMaxSsidHistory];
 uint8_t s_ssid_history_count = 0;
 
 // Raw-HTML custom parameter. WiFiManagerParameter(const char*) stores the
@@ -147,17 +157,24 @@ void loadSsidHistory() {
   }
   const String blob = prefs.getString(kSsidHistoryKey, "");
   prefs.end();
+  if (blob.length() == 0) {
+    return;
+  }
 
-  int start = 0;
-  while (start < static_cast<int>(blob.length()) &&
-         s_ssid_history_count < config::kMaxSsidHistory) {
-    const int nl = blob.indexOf('\n', start);
-    const String item = (nl == -1) ? blob.substring(start) : blob.substring(start, nl);
-    if (item.length() > 0) {
-      s_ssid_history[s_ssid_history_count++] = item;
-    }
-    if (nl == -1) break;
-    start = nl + 1;
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, blob);
+  if (err) {
+    Serial.printf("[WIFI] SSID history parse error: %s\n", err.c_str());
+    return;
+  }
+
+  for (JsonObject item : doc.as<JsonArray>()) {
+    if (s_ssid_history_count >= config::kMaxSsidHistory) break;
+    const char* ssid = item["ssid"] | "";
+    if (ssid[0] == '\0') continue;
+    s_ssid_history[s_ssid_history_count].ssid = ssid;
+    s_ssid_history[s_ssid_history_count].pass = item["pass"] | "";
+    ++s_ssid_history_count;
   }
 }
 
@@ -166,21 +183,26 @@ void saveSsidHistory() {
   if (!prefs.begin(kSsidHistoryNamespace, false)) {
     return;
   }
-  String blob;
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
   for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
-    blob += s_ssid_history[i];
-    blob += '\n';
+    JsonObject item = arr.add<JsonObject>();
+    item["ssid"] = s_ssid_history[i].ssid;
+    item["pass"] = s_ssid_history[i].pass;
   }
+  String blob;
+  serializeJson(doc, blob);
   prefs.putString(kSsidHistoryKey, blob);
   prefs.end();
 }
 
-/** Move ssid to the front (deduped), dropping the oldest past kMaxSsidHistory. */
-void ssidHistoryPush(const String& ssid) {
+/** Move ssid (with its password) to the front (deduped), dropping the
+ *  oldest past kMaxSsidHistory. */
+void ssidHistoryPush(const String& ssid, const String& pass) {
   if (ssid.length() == 0) return;
 
   for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
-    if (s_ssid_history[i] == ssid) {
+    if (s_ssid_history[i].ssid == ssid) {
       for (uint8_t j = i; j + 1 < s_ssid_history_count; ++j) {
         s_ssid_history[j] = s_ssid_history[j + 1];
       }
@@ -195,7 +217,8 @@ void ssidHistoryPush(const String& ssid) {
   for (uint8_t i = new_count - 1; i > 0; --i) {
     s_ssid_history[i] = s_ssid_history[i - 1];
   }
-  s_ssid_history[0] = ssid;
+  s_ssid_history[0].ssid = ssid;
+  s_ssid_history[0].pass = pass;
   s_ssid_history_count = new_count;
 
   saveSsidHistory();
@@ -216,10 +239,12 @@ void rebuildSsidHistoryHtml() {
   if (s_ssid_history_count == 0) {
     html += "<p style=\"font-size:0.9em;\">No recent networks saved yet.</p>";
   } else {
+    html += "<p style=\"font-size:0.85em;color:#888;\">Tried in order below if the "
+            "primary network isn't found.</p>";
     for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
       html += "<div style=\"display:flex;justify-content:space-between;"
               "align-items:center;margin:4px 0;\"><span>";
-      html += s_ssid_history[i];
+      html += s_ssid_history[i].ssid;
       html += "</span><a href=\"/delssid?i=";
       html += String(i);
       html += "\" style=\"margin-left:10px;\">Remove</a></div>";
@@ -232,11 +257,13 @@ void rebuildSsidHistoryHtml() {
 
 /** Fired by WiFiManager only after a *successful* connect to newly-submitted
  *  credentials (setBreakAfterConfig() is not used in this app, so this never
- *  fires on a failed save). WiFi.SSID() reflects the network just joined. */
+ *  fires on a failed save). WiFi.SSID()/WiFi.psk() reflect the network just
+ *  joined. */
 void onWifiConnectSaved() {
   const String ssid = WiFi.SSID();
+  const String pass = WiFi.psk();
   if (ssid.length() > 0) {
-    ssidHistoryPush(ssid);
+    ssidHistoryPush(ssid, pass);
     rebuildSsidHistoryHtml();
   }
 }
@@ -669,6 +696,50 @@ bool scanAndConnectSavedNetworks(bool show_ui) {
   }
 
   Serial.println("[WIFI] Connection attempts timed out.");
+
+  // 5. Fall back to remembered networks (SSID history), skipping whichever
+  // one we just tried as primary above. Shares kWifiConnectAttempts with
+  // primary (see config.h) — at 1 attempt each, a full cycle's length
+  // scales with how many networks are saved rather than ballooning
+  // regardless, since wifiReconnect()'s 5-cycle outer loop already gives
+  // every network multiple whole passes over time.
+  for (uint8_t i = 0; i < s_ssid_history_count; ++i) {
+    const String& fallback_ssid = s_ssid_history[i].ssid;
+    if (fallback_ssid == savedSSID) {
+      continue;  // already just tried this one as primary
+    }
+
+    Serial.printf("[WIFI] Trying remembered network: %s\n", fallback_ssid.c_str());
+    if (show_ui) {
+      statusScreenConnectingBegin(fallback_ssid.c_str());
+    }
+
+    bool connected = false;
+    for (uint8_t attempt = 1; attempt <= maxAttempts; ++attempt) {
+      if (attempt > 1) {
+        Serial.printf("[WIFI] Retry %u/%u for %s...\n", attempt, maxAttempts,
+                      fallback_ssid.c_str());
+      }
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      delay(400);
+      prepareSta();
+      WiFi.begin(fallback_ssid.c_str(), s_ssid_history[i].pass.c_str());
+
+      if (waitForLinkWithUi(fallback_ssid.c_str(), config::kWifiConnectAttemptMs)) {
+        connected = true;
+        break;
+      }
+    }
+
+    if (connected) {
+      Serial.printf("[WIFI] Connected via remembered network! IP: %s\n",
+                    WiFi.localIP().toString().c_str());
+      return true;
+    }
+  }
+
+  Serial.println("[WIFI] All remembered networks failed.");
   return false;
 }
 
@@ -766,10 +837,35 @@ void wifiResetCredentialsAndReboot() {
   esp_restart();
 }
 
+uint8_t s_wifi_reconnect_fail_count = 0;
+
 bool wifiReconnect() {
   bootButtonInit();
   Serial.println("WiFi reconnecting...");
-  return scanAndConnectSavedNetworks(true);
+
+  if (scanAndConnectSavedNetworks(true)) {
+    s_wifi_reconnect_fail_count = 0;
+    return true;
+  }
+
+  ++s_wifi_reconnect_fail_count;
+  Serial.printf("[WIFI] Reconnect cycle failed (%u/%u before opening setup portal)\n",
+                s_wifi_reconnect_fail_count, config::kWifiReconnectMaxFailedCycles);
+
+  if (s_wifi_reconnect_fail_count < config::kWifiReconnectMaxFailedCycles) {
+    return false;
+  }
+
+  // Exhausted the primary network and every remembered fallback, this many
+  // times in a row — stop retrying silently and hand it back to whoever's
+  // physically there to fix it.
+  Serial.println("[WIFI] Too many failed reconnect cycles — opening setup portal.");
+  s_wifi_reconnect_fail_count = 0;
+  if (openConfigPortal() && wifiLinkUp()) {
+    WiFi.setAutoReconnect(true);
+    return true;
+  }
+  return false;
 }
 
 void wifiLoop() {

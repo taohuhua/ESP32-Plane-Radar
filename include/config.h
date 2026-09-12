@@ -24,15 +24,30 @@ constexpr char kPortalIp[] = "192.168.4.1";
 constexpr char kPortalHostname[] = "plane-radar";
 constexpr char kPortalHostUrl[] = "plane-radar.local";
 
-/** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
-constexpr unsigned long kWifiConnectAttemptMs = 15000;
-constexpr uint8_t kWifiConnectAttempts = 3;
+/** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times per
+ *  network (primary AND each remembered fallback share this count). A
+ *  genuinely reachable network resolves (success or clear failure) within a
+ *  few seconds. Kept at 1 attempt each deliberately: with the 5-cycle outer
+ *  retry in wifiReconnect() already giving every network multiple whole
+ *  passes over time, a second attempt within the same pass mostly just
+ *  multiplies total time by however many SSIDs are saved — 3 saved networks
+ *  at 2 attempts each was pushing a single cycle past a minute on its own. */
+constexpr unsigned long kWifiConnectAttemptMs = 8000;
+constexpr uint8_t kWifiConnectAttempts = 1;
 constexpr unsigned long kWifiPortalTimeoutSec = 0;  // 0 = no timeout while configuring
 constexpr unsigned long kWifiConnectingFrameMs = 50;
 /** Wait after disconnect before reconnecting (avoids portal on brief drops). */
 constexpr unsigned long kWifiDownGraceMs = 4000;
 /** Minimum interval between background reconnect tries. */
 constexpr unsigned long kWifiReconnectIntervalMs = 15000;
+/** After this many consecutive failed reconnect cycles (primary + all
+ *  remembered fallbacks, all exhausted), give up retrying silently and open
+ *  the setup portal instead. At current timing (~24s/cycle + 15s gap), 5
+ *  cycles is roughly 3 minutes — long enough to ride out a brief router
+ *  reboot without prematurely booting into AP mode, short enough that a
+ *  genuine "nothing it knows about is in range" situation doesn't loop
+ *  forever waiting on a manual BOOT long-press. */
+constexpr uint8_t kWifiReconnectMaxFailedCycles = 5;
 
 // --- Buttons & Hardware Controls ---
 constexpr gpio_num_t kBootPin = GPIO_NUM_9;            // System BOOT pin (Flashing / Factory Reset)
